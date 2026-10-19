@@ -102,9 +102,8 @@ export function riskOf(call, { policy = "risky", cwd = process.cwd() } = {}) {
       if (policy === "all") return "runs a shell command";
       // Secrets named on the command line count too (cat ~/.zshrc, grep KEY .env).
       for (const [pattern, reason] of RISKY_COMMANDS) if (pattern.test(command)) return reason;
-      if (SECRET_PATHS.some((pattern) => command.split(/[\s'"=<>|;&]+/).some((word) => word && pattern.test(word)))) {
-        return "touches a file that may hold keys";
-      }
+      const secret = command.split(/[\s'"=<>|;&()]+/).find((word) => word && SECRET_PATHS.some((pattern) => pattern.test(word)));
+      if (secret) return `touches ${secret.slice(0, 120)}, which may hold keys`;
       return null;
     }
     case "read":
