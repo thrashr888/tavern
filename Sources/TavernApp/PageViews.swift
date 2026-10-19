@@ -12,6 +12,11 @@ struct DashboardView: View {
 
     @State private var containersRunning: Int?
 
+    /// Distinct open tickets that some party member is on.
+    private var agentTicketCount: Int {
+        Set(model.roster.members.flatMap { model.tasks(for: $0) }.filter { $0.state != nil }.map(\.identifier)).count
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -32,7 +37,9 @@ struct DashboardView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], alignment: .leading, spacing: 12) {
                     StatTile(title: "Open goals", value: model.openIssues.isEmpty ? "–" : "\(model.openIssues.count)",
                              symbol: "checklist") { selection = .goals }
-                    StatTile(title: "Agent tasks", value: "\(model.assignments.count)", symbol: "paperplane") { selection = .goals }
+                    // Open tickets an agent is on: sent from Tavern, or labeled agent:<id> in Linear.
+                    StatTile(title: "With agents", value: model.openIssues.isEmpty ? "–" : "\(agentTicketCount)",
+                             symbol: "paperplane") { selection = .goals }
                     StatTile(title: "Containers up", value: containersRunning.map(String.init) ?? "–",
                              symbol: "shippingbox") { selection = .services }
                     StatTile(title: "\(model.roster.party) threads", value: "\(stats.threadCount)", symbol: "tray.full") { selection = .mail(project: nil) }

@@ -25,7 +25,7 @@ private struct QuickCardModifier: ViewModifier {
                 settle()
             }
             .popover(isPresented: $showing, arrowEdge: .trailing) {
-                QuickReplyCard(member: member, writing: $writing, close: { showing = false })
+                QuickReplyCard(member: member, writing: $writing)
                     .onHover { inside in
                         overCard = inside
                         settle()
@@ -46,7 +46,6 @@ private struct QuickCardModifier: ViewModifier {
 struct QuickReplyCard: View {
     let member: RosterMember
     @Binding var writing: Bool
-    let close: () -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -63,15 +62,6 @@ struct QuickReplyCard: View {
                 }
             }
             .padding(14)
-            HStack {
-                Spacer()
-                Button("Open \(member.name)") {
-                    NotificationCenter.default.post(name: .tavernOpenPage, object: Page.forMember(member).storageKey)
-                    close()
-                }
-                .buttonStyle(.link)
-            }
-            .padding([.horizontal, .bottom], 14)
         }
         .frame(width: 360, alignment: .leading)
     }
@@ -184,7 +174,7 @@ private struct LatestMessage: View {
                 }
             }
             ScrollView {
-                Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                Text(LinkedText.attributed(text.trimmingCharacters(in: .whitespacesAndNewlines)))
                     .tavernFont(.callout)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

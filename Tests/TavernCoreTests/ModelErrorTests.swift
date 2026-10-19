@@ -247,3 +247,13 @@ final class TrustedSenderTests: XCTestCase {
         XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; spf=fail x=dmarc=pass header.from=sam.example"), [], "result must lead the clause")
     }
 }
+
+final class LinkedTextTests: XCTestCase {
+    func testWebAddressesBecomeLinks() {
+        let text = "Herald: https://files.example.com/herald-oct-19?via=im and www.example.org, not mailto:x@y.z or ftp://host/x."
+        let links = LinkedText.links(in: text).map(\.absoluteString)
+        XCTAssertEqual(links.first, "https://files.example.com/herald-oct-19?via=im")
+        XCTAssertFalse(links.contains { $0.hasPrefix("mailto:") || $0.hasPrefix("ftp:") })
+        XCTAssertEqual(String(LinkedText.attributed(text).characters), text, "the text itself is unchanged")
+    }
+}

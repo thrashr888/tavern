@@ -292,7 +292,8 @@ private struct IMessageConversation: View {
                 if !message.images.isEmpty { InlineImages(paths: message.images) }
                 if !message.displayText.isEmpty {
                     // Plain text: an iMessage is not Markdown, and a [label](url) must not hide where it goes.
-                    Text(message.displayText)
+                    // Web addresses open in the default browser.
+                    Text(LinkedText.attributed(message.displayText))
                         .textSelection(.enabled)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)

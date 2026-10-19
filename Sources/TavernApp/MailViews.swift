@@ -249,7 +249,7 @@ private struct MessageCard: View {
                 Text(message.date.formatted(date: .abbreviated, time: .shortened))
                     .tavernFont(.caption).foregroundStyle(.secondary)
             }
-            Text(message.body.isEmpty ? message.snippet : message.body)
+            Text(LinkedText.attributed(message.body.isEmpty ? message.snippet : message.body))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
