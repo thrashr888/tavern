@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds a release Tavern.app and installs it in ~/Applications (ad-hoc signed, for this Mac only).
+# Builds a release Tavern.app and installs it in ~/Applications, signed for this Mac only.
+# scripts/release.sh uses it with BUNDLE_ID, VERSION and TAVERN_APP set.
 #   scripts/bundle.sh            # build, install, relaunch
 #   NO_LAUNCH=1 scripts/bundle.sh
 set -euo pipefail
@@ -15,11 +16,11 @@ cat > "$app.new/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>dev.thrashr888.tavern.dev</string>
+<key>CFBundleIdentifier</key><string>${BUNDLE_ID:-dev.thrashr888.tavern.dev}</string>
 <key>CFBundleName</key><string>Tavern</string>
 <key>CFBundleExecutable</key><string>Tavern</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>$(git describe --always --dirty)</string>
+<key>CFBundleShortVersionString</key><string>${VERSION:-$(git describe --always --dirty)}</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHighResolutionCapable</key><true/>
