@@ -197,13 +197,10 @@ private struct NeedsYouSection: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var mail: MailFeed
     @Binding var selection: Page?
-    /// iMessage conversations whose last word, in the last day, is the member's.
-    @State private var unanswered: [(member: RosterMember, message: IMessage)] = []
 
     var body: some View {
-        let asks = mail.threads(project: nil)
-            .filter { $0.lastDate > Date().addingTimeInterval(-3 * 86400) && !mail.isArchived($0) && $0.ask(of: model.roster.owner) != nil }
-            .prefix(6)
+        let asks = model.mailAsks.prefix(6)
+        let unanswered = model.unansweredIMessages
         VStack(alignment: .leading, spacing: 10) {
             Text("Needs you").tavernFont(.headline, weight: .semibold)
             VStack(spacing: 0) {
@@ -229,7 +226,7 @@ private struct NeedsYouSection: View {
                         }
                     }
                 }
-                ForEach(unanswered, id: \.member.id) { item in
+                ForEach(unanswered) { item in
                     Button { selection = .member(id: item.member.id) } label: {
                         NeedsRow(member: item.member, title: "\(item.member.name) is waiting on your reply",
                                  detail: "iMessage · \(item.message.text.prefix(90)) · \(item.message.date.formatted(.relative(presentation: .named)))",
@@ -256,20 +253,6 @@ private struct NeedsYouSection: View {
                 }
             }
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-        }
-        .task {
-            while !Task.isCancelled {
-                var found: [(member: RosterMember, message: IMessage)] = []
-                for member in model.roster.members {
-                    guard let handle = member.imessage,
-                          // A tapback ("Reacted ✅ to …") isn't a message that wants an answer.
-                          let last = try? await CiderMessages().history(with: handle, days: 1).last(where: { !$0.text.hasPrefix("Reacted ") }),
-                          !last.fromMe else { continue }
-                    found.append((member, last))
-                }
-                unanswered = found
-                try? await Task.sleep(for: .seconds(60))
-            }
         }
     }
 }

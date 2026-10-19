@@ -68,6 +68,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var openIssues: [LinearIssue] = []
     private let assignmentStore = AssignmentStore.defaultURL().map(AssignmentStore.init(url:))
     private let alerts = AgentAlerts()
+    /// iMessage conversations whose last word, in the last day, is the member's.
+    @Published private(set) var unansweredIMessages: [UnansweredMessage] = []
 
     init() {
         let loaded = Roster.load(from: Roster.defaultURL())
@@ -81,6 +83,7 @@ final class AppModel: ObservableObject {
             store = nil
             storeError = String(describing: error)
         }
+        alerts.model = self
     }
 
     func tasks(for agent: RosterMember) -> [AgentTask] {
@@ -141,6 +144,7 @@ final class AppModel: ObservableObject {
     /// Clears a finished task from Needs you.
     func acknowledgeTask(_ identifier: String) {
         if let all = try? assignmentStore?.acknowledge(identifier) { assignments = all }
+        checkAttention()
     }
 
     func assignment(for identifier: String) -> TaskAssignment? {
@@ -175,6 +179,7 @@ final class AppModel: ObservableObject {
         guard let linear else { return [] }
         let issues = try await linear.openIssues(refresh: refresh)
         openIssues = issues
+        checkAttention()
         return issues
     }
 
@@ -213,6 +218,82 @@ final class AppModel: ObservableObject {
                 Task { await session.connect() }
             }
         }
+        guard attentionTask == nil else { return }
+        // Mail and iMessage don't announce themselves; look every 30 seconds (Linear every few minutes, cached).
+        attentionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshUnansweredIMessages()
+                if self?.linear != nil { _ = try? await self?.loadOpenIssues() }
+                self?.checkAttention()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    private var attentionTask: Task<Void, Never>?
+
+    /// Hands the current "Needs you" items to the notifier.
+    func checkAttention() {
+        alerts.update(attention)
+    }
+
+    private func refreshUnansweredIMessages() async {
+        var found: [UnansweredMessage] = []
+        for member in roster.members {
+            guard let handle = member.imessage,
+                  // A tapback ("Reacted ✅ to …") isn't a message that wants an answer.
+                  let last = try? await CiderMessages().history(with: handle, days: 1).last(where: { !$0.text.hasPrefix("Reacted ") }),
+                  !last.fromMe else { continue }
+            found.append(UnansweredMessage(member: member, message: last))
+        }
+        if found != unansweredIMessages { unansweredIMessages = found }
+    }
+
+    /// Party mail from the last three days whose latest message asks the owner for something.
+    var mailAsks: [MailThread] {
+        guard let mail else { return [] }
+        return mail.threads(project: nil)
+            .filter { $0.lastDate > Date().addingTimeInterval(-3 * 86400) && !mail.isArchived($0) && $0.ask(of: roster.owner) != nil }
+    }
+
+    /// Everything on the Dashboard's "Needs you" list, as notifications.
+    var attention: [AttentionItem] {
+        var items: [AttentionItem] = []
+        for agent in roster.piAgents {
+            guard let session = sessions[agent.id] else { continue }
+            if let dialog = session.dialog {
+                items.append(AttentionItem(id: "dialog-\(agent.id)-\(dialog.id)", title: "\(agent.name) is waiting on you",
+                                           body: [dialog.title, dialog.message].compactMap { $0 }.joined(separator: "\n"),
+                                           page: .agent(id: agent.id)))
+            }
+            if case .failed(let reason) = session.presence {
+                items.append(AttentionItem(id: "failed-\(agent.id)", title: "\(agent.name) can't connect", body: reason,
+                                           page: .agent(id: agent.id), settles: true))
+            } else if let error = session.lastError {
+                items.append(AttentionItem(id: "error-\(agent.id)-\(error.prefix(80))", title: "\(agent.name) hit an error",
+                                           body: String(error.prefix(200)), page: .agent(id: agent.id), settles: true))
+            }
+        }
+        if !openIssues.isEmpty {
+            for member in roster.members {
+                for task in tasks(for: member).filter(\.isNewlyFinished) {
+                    items.append(AttentionItem(id: "finished-\(task.identifier)", title: "\(member.name) finished \(task.identifier)",
+                                               body: task.title, page: .goals, goal: task.identifier))
+                }
+            }
+        }
+        for item in unansweredIMessages {
+            items.append(AttentionItem(id: "imessage-\(item.member.id)-\(item.message.date.timeIntervalSince1970)",
+                                       title: "\(item.member.name) is waiting on your reply", body: String(item.message.text.prefix(200)),
+                                       page: .member(id: item.member.id)))
+        }
+        for thread in mailAsks {
+            let author = thread.messages.last?.author.flatMap { roster.member(id: $0) }
+            items.append(AttentionItem(id: "ask-\(thread.threadID)-\(thread.lastDate.timeIntervalSince1970)",
+                                       title: "\(author?.name ?? "Mail"): \(thread.ask(of: roster.owner) ?? thread.subject)",
+                                       body: thread.subject, page: .mail(project: nil), mailThread: thread.threadID))
+        }
+        return items
     }
 
     /// Sets up the mail feed and polls if Gmail is already connected on this Mac.
@@ -223,6 +304,7 @@ final class AppModel: ObservableObject {
         mailWatch = feed.$threads.sink { [weak self] threads in
             self?.lastSeen = threads.lastSeen()
             self?.routeMailEvents(threads)
+            self?.checkAttention()
         }
         feed.startPolling()
     }
@@ -265,4 +347,11 @@ final class AppModel: ObservableObject {
             }
         }
     }
+}
+
+/// An iMessage the owner hasn't answered.
+struct UnansweredMessage: Equatable, Identifiable {
+    var member: RosterMember
+    var message: IMessage
+    var id: String { member.id }
 }
