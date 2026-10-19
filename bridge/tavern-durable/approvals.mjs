@@ -47,10 +47,17 @@ const SECRET_PATHS = [
   /(^|\/)Library\/LaunchAgents(\/|$)/,
 ];
 
-function resolvePath(file, cwd) {
+/**
+ * Every place the tool might open: the raw path, lexical ".." first then symlinks (what Node's
+ * path.resolve does), and symlinks first then ".." (what the kernel does). Any one matching a
+ * secret path counts. A path that can't be checked (permissions, loops) comes back as null.
+ */
+function resolvePaths(file, cwd) {
   const text = String(file ?? "");
   const expanded = text === "~" ? HOME : text.startsWith("~/") ? path.join(HOME, text.slice(2)) : text;
-  return walk(expanded.startsWith("/") ? expanded : `${cwd}/${expanded}`);
+  const absolute = expanded.startsWith("/") ? expanded : `${cwd}/${expanded}`;
+  const lexical = path.resolve(absolute);
+  return [text, lexical, walk(lexical), walk(absolute)];
 }
 
 /**
@@ -70,10 +77,12 @@ function walk(file, depth = 0) {
     let stat;
     try {
       stat = fs.lstatSync(next);
-    } catch {
+    } catch (error) {
+      if (error?.code !== "ENOENT") return null;
       return path.join(next, ...parts.slice(i + 1));
     }
-    if (stat.isSymbolicLink() && depth < 40) {
+    if (stat.isSymbolicLink()) {
+      if (depth >= 40) return null;
       const target = fs.readlinkSync(next);
       const rest = parts.slice(i + 1).join("/");
       return walk(`${target.startsWith("/") ? target : `${current}/${target}`}${rest ? `/${rest}` : ""}`, depth + 1);
@@ -101,9 +110,9 @@ export function riskOf(call, { policy = "risky", cwd = process.cwd() } = {}) {
     case "read":
     case "write":
     case "edit": {
-      const file = resolvePath(args.path, cwd);
-      const named = String(args.path ?? "");
-      if (SECRET_PATHS.some((pattern) => pattern.test(file) || pattern.test(named))) return `${call.name === "read" ? "reads" : "changes"} a file that may hold keys`;
+      const files = resolvePaths(args.path, cwd);
+      if (files.includes(null)) return `${call.name === "read" ? "reads" : "changes"} a path that couldn't be checked`;
+      if (files.some((file) => SECRET_PATHS.some((pattern) => pattern.test(file)))) return `${call.name === "read" ? "reads" : "changes"} a file that may hold keys`;
       if (policy === "all" && call.name !== "read") return "changes a file";
       return null;
     }
