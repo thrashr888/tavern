@@ -37,8 +37,7 @@ brew install --cask thrashr888/tap/tavern
 ## Build and run
 
 ```bash
-swift build
-swift test
+scripts/check.sh       # durable host tests, swift build, swift test (no CI; run before pushing)
 scripts/bundle.sh      # builds a release Tavern.app into ~/Applications and opens it
 ```
 
