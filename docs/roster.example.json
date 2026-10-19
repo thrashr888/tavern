@@ -1,0 +1,108 @@
+{
+  "partyName": "Guild",
+  "mailLabel": "Guild",
+  "ownerName": "Sam",
+  "linearTeam": "ENG",
+  "lore": [
+    {
+      "title": "Team handbook",
+      "url": "https://docs.google.com/document/d/EXAMPLE/edit",
+      "kind": "doc"
+    },
+    {
+      "title": "Projects",
+      "url": "https://docs.google.com/spreadsheets/d/EXAMPLE/edit",
+      "kind": "sheet"
+    },
+    {
+      "title": "Linear",
+      "url": "https://linear.app/your-workspace/projects",
+      "kind": "linear"
+    }
+  ],
+  "mailProjects": [
+    {
+      "id": "website",
+      "label": "Website"
+    },
+    {
+      "id": "infra",
+      "label": "Infra"
+    }
+  ],
+  "members": [
+    {
+      "id": "scout",
+      "name": "Scout",
+      "kind": "pi",
+      "host": "This Mac",
+      "platform": "Pi",
+      "partyClass": "Ranger",
+      "animal": "Fox",
+      "avatarColor": "#3d7a5a",
+      "tailscaleName": "self",
+      "skills": [],
+      "piEndpoint": {
+        "kind": "tcp",
+        "host": "127.0.0.1",
+        "port": 19011
+      },
+      "owns": [
+        "Website"
+      ]
+    },
+    {
+      "id": "forge",
+      "name": "Forge",
+      "kind": "pi",
+      "host": "Server",
+      "platform": "Pi",
+      "partyClass": "Cleric",
+      "avatarColor": "#b4532a",
+      "tailscaleName": "my-server",
+      "skills": [],
+      "piEndpoint": {
+        "kind": "command",
+        "argv": [
+          "/usr/bin/ssh",
+          "-T",
+          "-o",
+          "BatchMode=yes",
+          "my-server",
+          "socat - TCP:127.0.0.1:19011"
+        ]
+      },
+      "owns": [
+        "Infra"
+      ]
+    },
+    {
+      "id": "sage",
+      "name": "Sage",
+      "kind": "hosted",
+      "platform": "Claude",
+      "partyClass": "Bard",
+      "avatarColor": "#4b4b8f",
+      "skills": [],
+      "signOffs": [
+        "Sage"
+      ]
+    },
+    {
+      "id": "lark",
+      "name": "Lark",
+      "kind": "hosted",
+      "platform": "ChatGPT",
+      "partyClass": "Artificer",
+      "avatarColor": "#8a5a9e",
+      "skills": [],
+      "mailFrom": [
+        "lark@example.com"
+      ],
+      "imessage": "+15555550123"
+    }
+  ],
+  "trustedSenders": [
+    "sam@example.com"
+  ]
+}

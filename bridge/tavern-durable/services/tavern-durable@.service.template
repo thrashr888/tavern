@@ -1,0 +1,20 @@
+# A systemd user unit for an agent's durable host on Linux. Save as
+# ~/.config/systemd/user/tavern-durable@.service, then:
+#   systemctl --user enable --now tavern-durable@AGENT
+# Consider running the host inside a sandbox (bwrap, a container) that hides your SSH keys and
+# other credentials: the agent's tools run with this unit's permissions.
+[Unit]
+Description=Tavern durable host for %i (loopback 19011)
+
+[Service]
+WorkingDirectory=%h/tavern-durable
+Environment=PI_REPO=%h/tavern-durable/.pi
+Environment=AGENT_CWD=%h/agents/%i
+Environment=TAVERN_DURABLE_PORT=19011
+# The docker CLI looks for /var/run/docker.sock; set DOCKER_HOST if your socket lives elsewhere.
+ExecStart=%h/tavern-durable/run.sh %i
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

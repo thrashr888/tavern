@@ -1,0 +1,16 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Credentials never live in the repo. Tavern reads keys from their host paths at runtime.
+*.key
+*.pem
+.env
+.env.*
+credentials*.json
+client_secret*.json
+token*.json
+linear-key
+docs/Pi-Durable-Technical-Manual.pdf

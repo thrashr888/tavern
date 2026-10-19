@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A macOS LaunchAgent for one agent's durable host. Replace AGENT and HOME, save as
+     ~/Library/LaunchAgents/dev.tavern.durable.AGENT.plist, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.tavern.durable.AGENT.plist
+     Put node on PATH (Homebrew or nvm). If the agent needs a provider key, pass only that key,
+     never your whole shell environment: an agent's tools can read its environment. -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.tavern.durable.AGENT</string>
+  <key>ProgramArguments</key><array>
+    <string>HOME/tavern-durable/run.sh</string><string>AGENT</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>HOME/Library/Logs/tavern-durable-AGENT.log</string>
+  <key>StandardErrorPath</key><string>HOME/Library/Logs/tavern-durable-AGENT.log</string>
+</dict></plist>

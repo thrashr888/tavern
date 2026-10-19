@@ -1,0 +1,424 @@
+import AppKit
+import SwiftUI
+import TavernCore
+
+struct RootView: View {
+    @EnvironmentObject private var model: AppModel
+    /// Last open page, by stable Tavern id. Restored at launch (Dashboard on first launch).
+    @SceneStorage("tavern.page") private var pageKey: String = ""
+    @AppStorage(TextScale.storageKey) private var textScale = TextScale.standard
+    @State private var selection: Page?
+    @State private var searching = false
+
+    var body: some View {
+        NavigationSplitView {
+            SidebarView(selection: $selection)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 232)
+        } detail: {
+            switch selection ?? .dashboard {
+            case .dashboard:
+                DashboardView(selection: $selection)
+            case .agent(let id):
+                AgentThreadView(agentID: id)
+            case .member(let id):
+                MemberView(memberID: id, selection: $selection)
+            case .mail(let project):
+                MailView(projectID: project)
+            case .settings:
+                AgentConfigView()
+            case .goals:
+                GoalsView(page: $selection)
+            case .services:
+                ServicesView()
+            }
+        }
+        .sheet(isPresented: $searching) {
+            SearchPalette(selection: $selection)
+                .environmentObject(model)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .tavernOpenSearch)) { _ in searching = true }
+        // ⌘F finds in the open conversation; pages without one open Search instead.
+        .onReceive(NotificationCenter.default.publisher(for: .tavernFind)) { _ in
+            switch selection ?? .dashboard {
+            case .agent: break
+            case .member(let id) where model.roster.member(id: id)?.imessage != nil: break
+            default: searching = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .tavernOpenGoals)) { _ in selection = .goals }
+        .onReceive(NotificationCenter.default.publisher(for: .tavernOpenPage)) { note in
+            if let key = note.object as? String, let page = Page(storageKey: key) {
+                selection = Page.restore(page.storageKey, roster: model.roster) == page ? page : selection
+            }
+        }
+        .tavernFont(.body)
+        .environment(\.textScale, textScale)
+        .background {
+            // ⌘+ (shifted =) as a second shortcut for View > Bigger, which owns ⌘=.
+            Button("") { textScale = TextScale.bigger(than: textScale) }
+                .keyboardShortcut("+", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        .onAppear {
+            // TAVERN_PAGE (a page storage key, e.g. "agent:flint") opens a page at launch, for testing.
+            let requested = ProcessInfo.processInfo.environment["TAVERN_PAGE"]
+            selection = Page.restore(requested ?? (pageKey.isEmpty ? nil : pageKey), roster: model.roster)
+        }
+        .task { await model.watchTailscale() }
+        .task { await model.watchWake() }
+        .task { await model.startMail() }
+        .task { model.startNotifications() }
+        .onChange(of: selection) { _, newValue in
+            if let newValue { pageKey = newValue.storageKey }
+        }
+    }
+}
+
+struct SidebarView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var modifiers: ModifierWatcher
+    @Binding var selection: Page?
+
+    var body: some View {
+        List(selection: $selection) {
+            NavigationLink(value: Page.dashboard) {
+                row { Label("Dashboard", systemImage: "square.grid.2x2") } hint: { ShortcutHint(page: .dashboard) }
+            }
+            NavigationLink(value: Page.goals) {
+                row { Label("Goals", systemImage: "checklist") } hint: { ShortcutHint(page: .goals) }
+            }
+            Button {
+                NotificationCenter.default.post(name: .tavernOpenSearch, object: nil)
+            } label: {
+                HStack {
+                    Label("Search", systemImage: "magnifyingglass")
+                    Spacer()
+                    Text("⌘K").tavernFont(.caption).foregroundStyle(.secondary)
+                }
+                // The whole row clicks, not just the label.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // The whole party: Pi agents live, hosted members by their last mail.
+            Section("Party") {
+                ForEach(model.roster.piAgents) { agent in
+                    NavigationLink(value: Page.agent(id: agent.id)) {
+                        row {
+                            if let session = model.session(for: agent.id) {
+                                PiAgentRow(agent: agent, session: session)
+                            } else {
+                                AgentRow(agent: agent, status: "not connected")
+                            }
+                        } hint: { ShortcutHint(page: .agent(id: agent.id)) }
+                    }
+                }
+                ForEach(model.roster.members.filter { $0.kind == .hosted }) { member in
+                    NavigationLink(value: Page.member(id: member.id)) {
+                        row {
+                            HostedMemberRow(member: member, lastSeen: model.lastSeen[member.id])
+                        } hint: { ShortcutHint(page: .member(id: member.id)) }
+                    }
+                }
+            }
+
+            Section("Machines") {
+                NavigationLink(value: Page.services) {
+                    row { Label("Services", systemImage: "shippingbox") } hint: { ShortcutHint(page: .services) }
+                }
+            }
+
+            Section("Mail") {
+                NavigationLink(value: Page.mail(project: nil)) {
+                    row { Label("All threads", systemImage: "tray") } hint: { ShortcutHint(page: .mail(project: nil)) }
+                }
+                ForEach(model.roster.mailProjects) { project in
+                    NavigationLink(value: Page.mail(project: project.id)) {
+                        Label(project.label, systemImage: "number")
+                    }
+                }
+            }
+
+            // The party's shared references, opened in the browser.
+            Section("Lore") {
+                ForEach(model.roster.loreLinks) { link in
+                    Button { NSWorkspace.shared.open(link.url) } label: {
+                        HStack {
+                            Label(link.title, systemImage: link.symbol)
+                            Spacer()
+                            Image(systemName: "arrow.up.right").imageScale(.small).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(link.url.absoluteString)
+                }
+            }
+
+            Section {
+                NavigationLink(value: Page.settings) {
+                    Label("Agent config", systemImage: "gearshape")
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        // Breathing room: rows on a 36pt rhythm, and space under the traffic lights.
+        .environment(\.defaultMinListRowHeight, 36)
+        .safeAreaInset(edge: .top) { Color.clear.frame(height: 6) }
+        .animation(.easeOut(duration: 0.12), value: modifiers.held)
+    }
+
+    private func row<Content: View, Hint: View>(@ViewBuilder _ content: () -> Content, @ViewBuilder hint: () -> Hint) -> some View {
+        HStack {
+            content()
+            Spacer(minLength: 4)
+            hint()
+        }
+    }
+}
+
+/// A hosted member: avatar, class, and when they last wrote to the party.
+private struct HostedMemberRow: View {
+    let member: RosterMember
+    let lastSeen: Date?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AvatarView(member: member, size: 32)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(member.name).fontWeight(.medium)
+                Text([member.partyClass, lastSeen.map { "seen \($0.formatted(.relative(presentation: .named)))" } ?? "mail only"]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// A sidebar row for a Pi agent with a local launch, showing its live presence.
+private struct PiAgentRow: View {
+    let agent: RosterMember
+    @ObservedObject var session: PiAgentSession
+
+    var body: some View {
+        AgentRow(agent: agent, status: session.dialog != nil ? "waiting on you" : session.presence.label)
+    }
+}
+
+private struct AgentRow: View {
+    let agent: RosterMember
+    let status: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AvatarView(member: agent, size: 40)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.name).fontWeight(.semibold)
+                if let partyClass = agent.partyClass {
+                    Text(partyClass).tavernFont(.caption).foregroundStyle(.secondary)
+                }
+                Text([agent.host, status].compactMap { $0 }.joined(separator: " · "))
+                    .tavernFont(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct AvatarView: View {
+    let member: RosterMember
+    var size: CGFloat = 28
+
+    var body: some View {
+        Group {
+            if let image = PartyArt.avatar(member.id) {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Color(hex: member.avatarColor).overlay(
+                    Text(member.initial)
+                        .font(.system(size: size * 0.45, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color(hex: member.avatarColor), lineWidth: max(1, size / 24)))
+        .accessibilityLabel(member.name)
+        .memberHoverCard(member)
+    }
+}
+
+extension View {
+    /// After a short hover, a card saying who this is: class, service and machine, model, presence.
+    func memberHoverCard(_ member: RosterMember) -> some View {
+        modifier(MemberHoverCardModifier(member: member))
+    }
+}
+
+private struct MemberHoverCardModifier: ViewModifier {
+    let member: RosterMember
+    @State private var hovering = false
+    @State private var showing = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                hovering = inside
+                if inside {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(550))
+                        if hovering { showing = true }
+                    }
+                } else {
+                    showing = false
+                }
+            }
+            .popover(isPresented: $showing, arrowEdge: .trailing) {
+                MemberHoverCard(member: member)
+            }
+    }
+}
+
+struct MemberHoverCard: View {
+    let member: RosterMember
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Group {
+                    if let image = PartyArt.avatar(member.id) {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color(hex: member.avatarColor)
+                    }
+                }
+                .frame(width: 52, height: 52)
+                .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(member.name).tavernFont(.headline, weight: .semibold)
+                    Text([member.partyClass, member.animal].compactMap { $0 }.joined(separator: " · "))
+                        .tavernFont(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+                if let where_ = whereItRuns { row("Runs", where_) }
+                if let model = model.session(for: member.id)?.config.model?.shortName { row("Model", model) }
+                if let usage = model.session(for: member.id)?.config.usage { row("Spent", usage.summary) }
+                if let presence { row("Status", presence) }
+                if let owns = owned, !owns.isEmpty { row("Owns", owns) }
+            }
+            .tavernFont(.caption)
+        }
+        .padding(14)
+        .frame(width: 260, alignment: .leading)
+    }
+
+    /// "Claude", "Pi on M5", "Instinct · iMessage".
+    private var whereItRuns: String? {
+        var parts: [String] = []
+        if let platform = member.platform { parts.append(member.host.map { "\(platform) on \($0)" } ?? platform) }
+        else if let host = member.host { parts.append(host) }
+        if member.imessage != nil { parts.append("iMessage") }
+        if let relay = member.relay.flatMap({ model.roster.member(id: $0) }) { parts.append("via \(relay.name)") }
+        return parts.isEmpty ? (member.kind == .hosted ? "\(model.roster.party) mail" : nil) : parts.joined(separator: " · ")
+    }
+
+    private var presence: String? {
+        if let session = model.session(for: member.id) {
+            return session.dialog != nil ? "Waiting on you" : session.presence.label.capitalized
+        }
+        return model.lastSeen[member.id].map { "Wrote \($0.formatted(.relative(presentation: .named)))" }
+    }
+
+    private var owned: String? {
+        let all = (member.owns ?? []).sorted()
+        return all.isEmpty ? nil : all.joined(separator: ", ")
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(.secondary)
+            Text(value)
+        }
+    }
+}
+
+/// Party art from ~/Library/Application Support/Tavern: `portrait.png` (or .jpg/.heic) and
+/// `avatars/<id>.png`. Members without art get a colored initial. Loaded once per name.
+@MainActor
+enum PartyArt {
+    private static var cache: [String: NSImage?] = [:]
+
+    static var portrait: NSImage? { image("portrait") }
+    static func avatar(_ id: String) -> NSImage? { image("avatars/\(id)") }
+
+    private static func image(_ name: String) -> NSImage? {
+        if let hit = cache[name] { return hit }
+        var found: NSImage?
+        if let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            for ext in ["png", "jpg", "jpeg", "heic"] {
+                if let image = NSImage(contentsOf: base.appendingPathComponent("Tavern/\(name).\(ext)")) { found = image; break }
+            }
+        }
+        cache[name] = found
+        return found
+    }
+}
+
+extension Color {
+    /// "#rrggbb" to Color; gray when the string doesn't parse.
+    init(hex: String) {
+        let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard digits.count == 6, let value = UInt32(digits, radix: 16) else {
+            self = .gray
+            return
+        }
+        self.init(
+            red: Double((value >> 16) & 0xff) / 255,
+            green: Double((value >> 8) & 0xff) / 255,
+            blue: Double(value & 0xff) / 255
+        )
+    }
+}
+
+extension Notification.Name {
+    /// Opens the ⌘K palette (from the menu command or the sidebar).
+    static let tavernOpenSearch = Notification.Name("tavern.openSearch")
+    /// Opens Goals; set `AppModel.focusedGoal` first to select an issue.
+    static let tavernOpenGoals = Notification.Name("tavern.openGoals")
+}
+
+/// Edit > Search… (⌘K).
+struct SearchCommands: Commands {
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Search…") { NotificationCenter.default.post(name: .tavernOpenSearch, object: nil) }
+                .keyboardShortcut("k", modifiers: .command)
+            Divider()
+            Button("Find…") { NotificationCenter.default.post(name: .tavernFind, object: nil) }
+                .keyboardShortcut("f", modifiers: .command)
+            Button("Find Next") { NotificationCenter.default.post(name: .tavernFindNext, object: nil) }
+                .keyboardShortcut("g", modifiers: .command)
+            Button("Find Previous") { NotificationCenter.default.post(name: .tavernFindPrevious, object: nil) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+        }
+    }
+}
+
+extension LoreLink {
+    var symbol: String {
+        switch kind {
+        case .doc: return "doc.text"
+        case .sheet: return "tablecells"
+        case .linear: return "checklist"
+        case .folder: return "folder"
+        case .link: return "link"
+        }
+    }
+}

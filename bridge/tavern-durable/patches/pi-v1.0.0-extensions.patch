@@ -1,0 +1,29 @@
+diff --git a/packages/coding-agent/src/experimental/durable/runtime.ts b/packages/coding-agent/src/experimental/durable/runtime.ts
+index fcd6e52..1bc24c6 100644
+--- a/packages/coding-agent/src/experimental/durable/runtime.ts
++++ b/packages/coding-agent/src/experimental/durable/runtime.ts
+@@ -8,6 +8,7 @@ import {
+ 	type ConversationView,
+ 	type Cursor,
+ 	type EntryRecord,
++	type Extension,
+ 	Harness,
+ 	type ModelRef,
+ 	ROOT_CONVERSATION_ID,
+@@ -81,6 +82,8 @@ export interface DurableController {
+ export interface OpenDurableOptions {
+ 	readonly cwd?: string;
+ 	readonly continueSession?: boolean;
++	/** Installed next to the coding tools, for hooks such as approvals. */
++	readonly extensions?: readonly Extension[];
+ }
+ 
+ export interface OpenDurableResult {
+@@ -132,6 +135,7 @@ export async function openDurable(options: OpenDurableOptions = {}): Promise<Ope
+ 		const settings = createHarnessSettings(settingsManager);
+ 		const registry = createCodingRegistry(settingsManager, location.cwd);
+ 		registry.install(Subagent);
++		for (const extension of options.extensions ?? []) registry.install(extension);
+ 
+ 		const pendingReports: unknown[] = [];
+ 		let report: (error: unknown) => void = (error) => pendingReports.push(error);

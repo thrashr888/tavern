@@ -1,0 +1,10 @@
+{
+  "name": "tavern-durable",
+  "private": true,
+  "type": "module",
+  "description": "Keeps one Pi Durable session alive per agent and serves Tavern's Pi RPC subset over loopback TCP.",
+  "engines": { "node": ">=22.19" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
