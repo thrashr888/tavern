@@ -36,9 +36,10 @@ private struct MailFeedView: View {
 
     var body: some View {
         switch feed.state {
-        case .notConfigured:
+        // Mail already stored stays readable while Gmail is unset or signed out.
+        case .notConfigured where feed.threads.isEmpty:
             MailSetupNote()
-        case .signedOut, .signingIn:
+        case .signedOut where feed.threads.isEmpty, .signingIn where feed.threads.isEmpty:
             connectPrompt
         default:
             HStack(spacing: 0) {

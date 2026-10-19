@@ -374,9 +374,9 @@ enum PartyArt {
     private static func image(_ name: String) -> NSImage? {
         if let hit = cache[name] { return hit }
         var found: NSImage?
-        if let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+        if let base = TavernPaths.base {
             for ext in ["png", "jpg", "jpeg", "heic"] {
-                if let image = NSImage(contentsOf: base.appendingPathComponent("Tavern/\(name).\(ext)")) { found = image; break }
+                if let image = NSImage(contentsOf: base.appendingPathComponent("\(name).\(ext)")) { found = image; break }
             }
         }
         cache[name] = found

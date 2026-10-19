@@ -3,6 +3,8 @@
 A native Mac app for running a party of AI agents: the ones you can steer live, and the ones
 that live elsewhere and talk to you by email or iMessage.
 
+![The Dashboard: what needs you, mail and agent activity, and the party](docs/screenshots/dashboard.png)
+
 - **Pi agents, live.** Each [Pi](https://github.com/earendil-works/pi) agent has one durable
   thread: streaming replies, tool steps, steer and queue, abort, approvals, images. Agents can
   run on this Mac or on other machines reached over SSH (see `bridge/tavern-durable`). The host
@@ -17,7 +19,22 @@ that live elsewhere and talk to you by email or iMessage.
 - **Services.** Docker containers on each agent's machine.
 - **Lore.** Links to the party's shared docs and boards.
 
-## Build and run (macOS 14+)
+| A Pi agent's thread | An approval waiting on you |
+| --- | --- |
+| ![Scout's thread: a fix, its tool steps and a PR](docs/screenshots/agent.png) | ![Forge asks before removing a Docker volume](docs/screenshots/approval.png) |
+
+![Party mail, threaded and attributed to members](docs/screenshots/mail.png)
+
+Screenshots show a made-up party. `scripts/demo.sh` runs it (fake agents, sample mail, its own
+data folder via `TAVERN_HOME`), and `scripts/screenshots.sh` retakes these images.
+
+## Install (Apple silicon, macOS 14+)
+
+```bash
+brew install --cask thrashr888/tap/tavern
+```
+
+## Build and run
 
 ```bash
 swift build

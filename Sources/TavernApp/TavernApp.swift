@@ -15,7 +15,7 @@ struct TavernApp: App {
            let icon = NSImage(contentsOf: url) {
             NSApplication.shared.applicationIconImage = icon
         }
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        if TavernPaths.separateHome == nil { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
     var body: some Scene {
@@ -84,6 +84,8 @@ final class AppModel: ObservableObject {
             storeError = String(describing: error)
         }
         alerts.model = self
+        // TAVERN_MAIL_THREAD selects a thread when Mail opens, like TAVERN_PAGE, for screenshots.
+        focusedMailThread = ProcessInfo.processInfo.environment["TAVERN_MAIL_THREAD"]
     }
 
     func tasks(for agent: RosterMember) -> [AgentTask] {

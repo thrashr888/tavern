@@ -37,7 +37,8 @@ final class AgentAlerts: NSObject, UNUserNotificationCenterDelegate {
         super.init()
     }
 
-    private var canNotify: Bool { Bundle.main.bundleIdentifier != nil }
+    /// A separate TAVERN_HOME (a demo) shares the app's notifications, so it stays quiet.
+    private var canNotify: Bool { Bundle.main.bundleIdentifier != nil && TavernPaths.separateHome == nil }
 
     func requestPermission() {
         guard canNotify else { return }

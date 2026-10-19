@@ -192,8 +192,7 @@ public struct Roster: Codable, Equatable, Sendable {
 
     /// Default location: ~/Library/Application Support/Tavern/roster.json
     public static func defaultURL() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Tavern/roster.json")
+        TavernPaths.file("roster.json")
     }
 
     /// An example party for a first launch without roster.json: one local Pi agent and one

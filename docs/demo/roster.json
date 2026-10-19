@@ -1,0 +1,34 @@
+{
+  "partyName": "Guild",
+  "mailLabel": "Guild",
+  "ownerName": "Sam",
+  "lore": [
+    { "title": "Team handbook", "url": "https://example.com/handbook", "kind": "doc" },
+    { "title": "Projects", "url": "https://example.com/projects", "kind": "sheet" }
+  ],
+  "mailProjects": [
+    { "id": "website", "label": "Website" },
+    { "id": "infra", "label": "Infra" }
+  ],
+  "members": [
+    {
+      "id": "scout", "name": "Scout", "kind": "pi", "host": "Studio", "platform": "Pi", "partyClass": "Ranger",
+      "animal": "Fox", "avatarColor": "#3d7a5a", "skills": [], "owns": ["Website"],
+      "piEndpoint": { "kind": "tcp", "host": "127.0.0.1", "port": 19611 }
+    },
+    {
+      "id": "forge", "name": "Forge", "kind": "pi", "host": "Server", "platform": "Pi", "partyClass": "Cleric",
+      "animal": "Ox", "avatarColor": "#b4532a", "skills": [], "owns": ["Infra"],
+      "piEndpoint": { "kind": "tcp", "host": "127.0.0.1", "port": 19612 }
+    },
+    {
+      "id": "sage", "name": "Sage", "kind": "hosted", "platform": "Claude", "partyClass": "Bard", "animal": "Owl",
+      "avatarColor": "#4b4b8f", "skills": [], "signOffs": ["Sage"], "summary": "Writes the release notes and the weekly digest."
+    },
+    {
+      "id": "lark", "name": "Lark", "kind": "hosted", "platform": "ChatGPT", "partyClass": "Artificer", "animal": "Lark",
+      "avatarColor": "#8a5a9e", "skills": [], "mailFrom": ["lark@example.com"]
+    }
+  ],
+  "trustedSenders": ["sam@example.com"]
+}

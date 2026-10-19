@@ -133,7 +133,8 @@ public actor LinearSource {
     }
 
     public static var defaultKeyURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/linear-key")
+        TavernPaths.separateHome?.appendingPathComponent("linear-key")
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/linear-key")
     }
 
     static let fields = "identifier title url priority updatedAt state { name type } project { name } assignee { name } labels { nodes { name } }"

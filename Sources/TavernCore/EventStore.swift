@@ -30,10 +30,7 @@ public final class EventStore {
 
     /// Default on-disk location: ~/Library/Application Support/Tavern/tavern.sqlite
     public static func defaultURL() throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
-        )
-        let dir = base.appendingPathComponent("Tavern", isDirectory: true)
+        guard let dir = TavernPaths.base else { throw CocoaError(.fileNoSuchFile) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("tavern.sqlite")
     }

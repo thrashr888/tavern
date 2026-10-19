@@ -32,8 +32,7 @@ public actor GmailOAuth {
         }
 
         public static func defaultURL() -> URL? {
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("Tavern/gmail-oauth-client.json")
+            TavernPaths.file("gmail-oauth-client.json")
         }
 
         public static func load(from url: URL? = defaultURL()) -> Client? {

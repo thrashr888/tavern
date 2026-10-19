@@ -5,8 +5,7 @@ import Foundation
 /// copies, so a thread can show an image inline even when the agent runs on another machine.
 public enum AttachmentCache {
     public static var folder: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Tavern/attachments")
+        TavernPaths.file("attachments")
     }
 
     /// The host's file name for these bytes: the first 16 hex digits of their SHA-256.

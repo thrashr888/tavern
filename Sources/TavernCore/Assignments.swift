@@ -42,8 +42,7 @@ public struct AssignmentStore: Sendable {
     public init(url: URL) { self.url = url }
 
     public static func defaultURL() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Tavern/assignments.json")
+        TavernPaths.file("assignments.json")
     }
 
     public func load() -> [TaskAssignment] {
