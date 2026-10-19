@@ -608,7 +608,7 @@ private struct ThinkingView: View {
 }
 
 /// The loud "waiting on you" state for extension dialogs that pause the agent.
-private struct DialogBanner: View {
+struct DialogBanner: View {
     let dialog: PiDialog
     let onAnswer: (PiDialogAnswer) -> Void
     @State private var text = ""

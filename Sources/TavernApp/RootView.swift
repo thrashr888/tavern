@@ -113,6 +113,7 @@ struct SidebarView: View {
                                 AgentRow(agent: agent, status: "not connected")
                             }
                         } hint: { ShortcutHint(page: .agent(id: agent.id)) }
+                        .memberQuickCard(agent)
                     }
                 }
                 ForEach(model.roster.members.filter { $0.kind == .hosted }) { member in
@@ -120,6 +121,7 @@ struct SidebarView: View {
                         row {
                             HostedMemberRow(member: member, lastSeen: model.lastSeen[member.id])
                         } hint: { ShortcutHint(page: .member(id: member.id)) }
+                        .memberQuickCard(member)
                     }
                 }
             }
@@ -186,7 +188,7 @@ private struct HostedMemberRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(member: member, size: 32)
+            AvatarView(member: member, size: 32, hoverCard: false)
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.name).fontWeight(.medium)
                 Text([member.partyClass, lastSeen.map { "seen \($0.formatted(.relative(presentation: .named)))" } ?? "mail only"]
@@ -214,7 +216,7 @@ private struct AgentRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarView(member: agent, size: 40)
+            AvatarView(member: agent, size: 40, hoverCard: false)
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.name).fontWeight(.semibold)
                 if let partyClass = agent.partyClass {
@@ -232,6 +234,8 @@ private struct AgentRow: View {
 struct AvatarView: View {
     let member: RosterMember
     var size: CGFloat = 28
+    /// Off in the sidebar, where the whole row shows the quick-reply card instead.
+    var hoverCard = true
 
     var body: some View {
         Group {
@@ -249,7 +253,16 @@ struct AvatarView: View {
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(Color(hex: member.avatarColor), lineWidth: max(1, size / 24)))
         .accessibilityLabel(member.name)
-        .memberHoverCard(member)
+        .modifier(OptionalHoverCard(member: member, enabled: hoverCard))
+    }
+}
+
+private struct OptionalHoverCard: ViewModifier {
+    let member: RosterMember
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled { content.memberHoverCard(member) } else { content }
     }
 }
 
