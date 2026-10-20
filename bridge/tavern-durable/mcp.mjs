@@ -13,28 +13,73 @@ const UI_EXTENSION = "io.modelcontextprotocol/ui";
 const UI_MIME = "text/html;profile=mcp-app";
 const MAX_TEXT = 60_000;
 
-/** One stdio MCP server: line-delimited JSON-RPC over the child's stdin and stdout. */
+/**
+ * One stdio MCP server: line-delimited JSON-RPC over the child's stdin and stdout. If it exits
+ * after starting (a remote proxy dropping, a crash), it starts again on its own with a growing
+ * delay, and calls made meanwhile wait for it instead of failing at once.
+ */
 export class McpServer {
   #child;
   #next = 1;
   #pending = new Map();
   #buffer = "";
+  #spec;
+  #log;
+  #closed = false;
+  #retryMs = 1000;
+  #back = null; // resolves when a restart finishes
 
-  constructor(name, { command, args = [], env = {} }, log = () => {}) {
+  constructor(name, spec, log = () => {}) {
     this.name = name;
     this.tools = [];
-    this.#child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
-    this.#child.stdout.setEncoding("utf8");
-    this.#child.stdout.on("data", (chunk) => this.#read(chunk));
-    this.#child.stderr.on("data", (chunk) => log(`[mcp ${name}] ${String(chunk).trim()}`));
+    this.#spec = spec;
+    this.#log = log;
+    this.#spawn();
+  }
+
+  #spawn() {
+    const { command, args = [], env = {} } = this.#spec;
+    this.exited = false;
+    this.#buffer = "";
+    const child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+    this.#child = child;
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => this.#read(chunk));
+    child.stderr.on("data", (chunk) => this.#log(`[mcp ${this.name}] ${String(chunk).trim()}`));
+    let done = false;
     const ended = (why) => {
+      if (done) return;
+      done = true;
       this.exited = true;
-      for (const { reject } of this.#pending.values()) reject(new Error(`${name} ${why}`));
+      for (const { reject } of this.#pending.values()) reject(new Error(`${this.name} ${why}`));
       this.#pending.clear();
+      if (this.started && !this.#closed) this.#restartLater(why);
     };
-    this.#child.on("exit", (code) => ended(`exited (${code})`));
-    this.#child.on("error", (error) => ended(`couldn't start: ${error.message}`));
-    this.#child.stdin.on("error", () => {});
+    child.on("exit", (code) => ended(`exited (${code})`));
+    child.on("error", (error) => ended(`couldn't start: ${error.message}`));
+    child.stdin.on("error", () => {});
+  }
+
+  #restartLater(why) {
+    if (this.#back) return;
+    const delay = this.#retryMs;
+    this.#retryMs = Math.min(this.#retryMs * 2, 60_000);
+    this.#log(`mcp ${this.name} ${why}; starting again in ${Math.round(delay / 1000)}s`);
+    this.#back = new Promise((resolve) => {
+      setTimeout(async () => {
+        try {
+          this.#spawn();
+          await this.#initialize();
+          this.#retryMs = 1000;
+          this.#log(`mcp ${this.name} is back`);
+        } catch (error) {
+          this.#log(`mcp ${this.name} didn't come back: ${error.message}`);
+        }
+        this.#back = null;
+        resolve();
+        if (this.exited && !this.#closed) this.#restartLater("is still down");
+      }, delay).unref?.();
+    });
   }
 
   #read(chunk) {
@@ -57,8 +102,14 @@ export class McpServer {
     }
   }
 
-  request(method, params = {}, timeoutMs = 60_000) {
-    if (this.exited) return Promise.reject(new Error(`${this.name} isn't running`));
+  async request(method, params = {}, timeoutMs = 60_000) {
+    // Mid-restart: wait for it (bounded) rather than failing the agent's call outright.
+    if (this.exited && this.#back) await Promise.race([this.#back, new Promise((r) => setTimeout(r, 30_000))]);
+    if (this.exited) throw new Error(`${this.name} isn't running`);
+    return this.#send(method, params, timeoutMs);
+  }
+
+  #send(method, params, timeoutMs) {
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -77,19 +128,32 @@ export class McpServer {
     if (!this.exited) this.#child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
   }
 
-  async start() {
-    const init = await this.request("initialize", {
+  async #initialize() {
+    const init = await this.#send("initialize", {
       protocolVersion: PROTOCOL,
       capabilities: { extensions: { [UI_EXTENSION]: { mimeTypes: [UI_MIME] } } },
       clientInfo: { name: "tavern-durable", version: "1" },
-    });
+    }, 60_000);
     this.notify("notifications/initialized");
     this.info = init?.serverInfo ?? {};
-    this.tools = (await this.request("tools/list")).tools ?? [];
+    // The agent's tool list is fixed when the host starts; a restart refreshes what the server
+    // reports (cards, annotations) for the tools it already offers.
+    this.tools = (await this.#send("tools/list", {}, 60_000)).tools ?? this.tools;
+  }
+
+  async start() {
+    await this.#initialize();
+    this.started = true;
     return this;
   }
 
   close() {
+    this.#closed = true;
+    this.#child.kill();
+  }
+
+  /** For tests: stop the child as a crash would. */
+  crash() {
     this.#child.kill();
   }
 }

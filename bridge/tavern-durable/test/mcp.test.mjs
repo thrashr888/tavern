@@ -44,3 +44,21 @@ test("tool names fit model limits", () => {
   assert.equal(agentToolName("cider", "weather.current"), "cider__weather_current");
   assert.equal(agentToolName("x".repeat(40), "y".repeat(40)).length, 64);
 });
+
+test("a server that drops starts again, and calls wait for it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-mcp-"));
+  fs.mkdirSync(path.join(dir, ".pi"));
+  fs.writeFileSync(path.join(dir, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { fake: { command: process.execPath, args: [here("./fake-mcp.mjs")] } } }));
+  const logs = [];
+  const [server] = await startServers({ cwd: dir, log: (line) => logs.push(line) });
+  try {
+    server.crash();
+    await new Promise((r) => setTimeout(r, 100));
+    const extension = mcpExtension([server]);
+    const result = await extension.tools[0].execute({ city: "SF" });
+    assert.match(result.content[0].text, /"temperature_c":15/);
+    assert.ok(logs.some((l) => /starting again/.test(l)) && logs.some((l) => /is back/.test(l)));
+  } finally {
+    server.close();
+  }
+});
