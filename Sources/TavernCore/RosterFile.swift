@@ -10,11 +10,32 @@ public enum RosterFile {
                              "piEndpoint", "tailscaleName", "schedule", "projects", "platform", "owns", "mailFrom", "signOffs",
                              "mailEvents", "relay", "imessage"]
 
+    public enum SaveError: Error, LocalizedError {
+        case unreadable(String)
+        public var errorDescription: String? {
+            if case .unreadable(let reason) = self { return "roster.json can't be read (\(reason)); fix it by hand first" }
+            return nil
+        }
+    }
+
     /// Saves `roster` to `url`. The first save keeps the old file as roster.json.before-settings.
+    /// A file that exists but can't be read or parsed is never overwritten.
     public static func save(_ roster: Roster, to url: URL) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let existing = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        var existing: [String: Any]?
+        if fm.fileExists(atPath: url.path) {
+            do {
+                guard let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else {
+                    throw SaveError.unreadable("not a JSON object")
+                }
+                existing = object
+            } catch let error as SaveError {
+                throw error
+            } catch {
+                throw SaveError.unreadable(error.localizedDescription)
+            }
+        }
         let backup = url.appendingPathExtension("before-settings")
         if existing != nil, !fm.fileExists(atPath: backup.path) {
             try fm.copyItem(at: url, to: backup)

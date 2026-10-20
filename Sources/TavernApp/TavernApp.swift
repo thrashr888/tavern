@@ -95,11 +95,24 @@ final class AppModel: ObservableObject {
     @Published private(set) var discovered: [DiscoveredAgent] = []
     @Published private(set) var discovering = false
     /// Why the last roster save failed, for Settings to show.
-    @Published var rosterSaveError: String?
+    @Published private(set) var rosterSaveError: String?
+    /// Set when roster.json exists but can't be read: Tavern shows the example party and Settings
+    /// changes nothing, so the file is never saved over.
+    let rosterLoadError: String?
+    /// Found agents being added (their avatar may be coming over SSH), so Add can't run twice.
+    @Published private(set) var adding: Set<String> = []
+    private var mailRosterTask: Task<Void, Never>?
 
     init() {
-        let loaded = Roster.load(from: Roster.defaultURL())
+        var loaded = Roster.fallback
+        var loadError: String?
+        do {
+            loaded = try Roster.loadFile(from: Roster.defaultURL()) ?? .fallback
+        } catch {
+            loadError = "roster.json can't be read (\(error.localizedDescription)). Fix it by hand; Settings won't save over it."
+        }
         roster = loaded
+        rosterLoadError = loadError
         hasRosterFile = Roster.defaultURL().map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         linear = loaded.linearTeam.flatMap { LinearSource.live(teamKey: $0) }
         assignments = assignmentStore?.load() ?? []
@@ -336,7 +349,7 @@ final class AppModel: ObservableObject {
     /// Sets up the mail feed and polls if Gmail is already connected on this Mac.
     func startMail() async {
         guard mail == nil, let store else { return }
-        let feed = await MailFeed.live(store: store, roster: roster)
+        let feed = await MailFeed.live(store: store) { [unowned self] in self.roster }
         mail = feed
         mailWatch = feed.$threads.sink { [weak self] threads in
             self?.lastSeen = threads.lastSeen()
@@ -376,11 +389,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Saves the roster Settings edited and shows it. Mail and Linear pick up a new label or team
-    /// at the next launch; everything else changes now.
+    /// The one way the roster changes (Settings, the Dashboard's Add): applies `change` to the
+    /// current roster and saves it to roster.json right away, so no edit works from a stale copy.
+    /// A new mail label or Linear team takes effect at the next launch; everything else now.
     @discardableResult
-    func saveRoster(_ updated: Roster) -> Bool {
-        guard let rosterURL else { return false }
+    func updateRoster(_ change: (inout Roster) -> Void) -> Bool {
+        guard rosterLoadError == nil, let rosterURL else { return false }
+        var updated = roster
+        change(&updated)
+        guard updated != roster || !hasRosterFile else { return true }
         do {
             try RosterFile.save(updated, to: rosterURL)
             rosterSaveError = nil
@@ -393,10 +410,16 @@ final class AppModel: ObservableObject {
             sessions[id] = nil
             Task { await session.disconnect() }
         }
-        PartyArt.reload()
         roster = updated
         hasRosterFile = true
         discovered.removeAll { updated.member(id: $0.id) != nil }
+        // Mail attribution follows the new names and addresses, once typing settles.
+        mailRosterTask?.cancel()
+        mailRosterTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            self.mail?.rosterChanged(self.roster)
+        }
         return true
     }
 
@@ -424,31 +447,34 @@ final class AppModel: ObservableObject {
         }
         let dismissed = Set(UserDefaults.standard.stringArray(forKey: Self.dismissedKey) ?? [])
         var seen = Set<String>()
+        // On a first launch the example members' ids (scout, sage) mustn't hide real agents.
         discovered = found.filter { agent in
-            roster.member(id: agent.id) == nil && !dismissed.contains(agent.id) && seen.insert(agent.id).inserted
+            (!hasRosterFile || roster.member(id: agent.id) == nil) && !dismissed.contains(agent.id) && seen.insert(agent.id).inserted
         }
     }
 
-    /// The roster entry for a found agent, with an id free in `roster` and its avatar copied in
-    /// when the install left one.
-    func member(for agent: DiscoveredAgent, in roster: Roster) async -> RosterMember {
-        var member = agent.member()
-        if roster.member(id: member.id) != nil { member.id = roster.newMemberID(for: member.name) }
-        if let base = TavernPaths.base, agent.avatarPath != nil,
-           await AgentDiscovery.fetchAvatar(of: agent, to: base.appendingPathComponent("avatars/\(member.id).png")) {
-            PartyArt.reload()
-        }
-        return member
-    }
-
-    /// Adds a found agent to the party (the Dashboard's "Add") and connects to it.
+    /// Adds a found agent to the party (the Dashboard's and Settings' "Add") and connects to it.
+    /// The avatar comes first, into a temporary file; the id is picked against the roster as it is
+    /// once that's done, so overlapping adds and Settings edits all survive.
     func add(_ agent: DiscoveredAgent) async {
-        var updated = roster
-        // On a first launch the example party goes away once a real member arrives.
-        if !hasRosterFile { updated.members = [] }
-        let member = await member(for: agent, in: updated)
-        updated.members.append(member)
-        if saveRoster(updated), let session = session(for: member.id) {
+        guard rosterLoadError == nil, adding.insert(agent.id).inserted else { return }
+        defer { adding.remove(agent.id) }
+        var avatar: URL?
+        if agent.avatarPath != nil {
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent("tavern-avatar-\(UUID().uuidString).png")
+            if await AgentDiscovery.fetchAvatar(of: agent, to: temp) { avatar = temp }
+        }
+        defer { if let avatar { try? FileManager.default.removeItem(at: avatar) } }
+        var member = agent.member()
+        let added = updateRoster { roster in
+            // On a first launch the example party goes away once a real member arrives.
+            if !hasRosterFile && roster == .fallback { roster.members = [] }
+            if roster.member(id: member.id) != nil { member.id = roster.newMemberID(for: member.name) }
+            roster.members.append(member)
+        }
+        guard added else { return }
+        if let avatar { try? PartyArt.set("avatars/\(member.id)", from: avatar) }
+        if let session = session(for: member.id) {
             Task { await session.connect() }
         }
     }

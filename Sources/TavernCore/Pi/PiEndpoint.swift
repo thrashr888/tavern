@@ -102,14 +102,15 @@ extension PiEndpoint {
         return nil
     }
 
-    /// Host, port and socat of an endpoint made by `ssh(host:port:socat:)` (or written the same
-    /// way by hand), so Settings can edit it; nil for anything else.
+    /// Host, port and socat of an endpoint made by `ssh(host:port:socat:)` (pi-bundle writes the
+    /// same shape), so Settings can edit it; nil for anything else, such as a command with its own
+    /// `-p` or `-i`, which Settings leaves as Custom rather than rebuild without them.
     public var sshTarget: (host: String, port: UInt16, socat: String)? {
-        guard case .command(let argv) = self, argv.first.map({ URL(fileURLWithPath: $0).lastPathComponent }) == "ssh",
-              argv.count >= 3, let last = argv.last, let range = last.range(of: " - TCP:127.0.0.1:"),
-              let port = UInt16(last[range.upperBound...]) else { return nil }
-        let host = argv[argv.count - 2]
-        guard !host.hasPrefix("-"), !host.contains("="), !host.contains(" ") else { return nil }
+        guard case .command(let argv) = self, argv.count == 8, let last = argv.last,
+              let range = last.range(of: " - TCP:127.0.0.1:"), let port = UInt16(last[range.upperBound...]) else { return nil }
+        let host = argv[6]
+        guard Array(argv[..<6]) == ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"],
+              !host.isEmpty, !host.hasPrefix("-"), !host.contains("="), !host.contains(" ") else { return nil }
         return (host, port, String(last[..<range.lowerBound]))
     }
 }

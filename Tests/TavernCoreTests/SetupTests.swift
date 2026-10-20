@@ -47,6 +47,15 @@ final class SetupTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path + ".before-settings"))
     }
 
+    func testSaveRefusesAFileItCannotRead() throws {
+        let url = dir.appendingPathComponent("roster.json")
+        try Data("{ not json".utf8).write(to: url)
+        XCTAssertThrowsError(try RosterFile.save(Roster.fallback, to: url))
+        XCTAssertEqual(try String(contentsOf: url), "{ not json")
+        XCTAssertThrowsError(try Roster.loadFile(from: url))
+        XCTAssertNil(try Roster.loadFile(from: dir.appendingPathComponent("missing.json")))
+    }
+
     func testNewMemberIDsAreUnique() {
         let roster = Roster(members: [RosterMember(id: "newagent", name: "New Agent", kind: .pi, avatarColor: "#000000")], mailProjects: [])
         XCTAssertEqual(roster.newMemberID(for: "New Agent"), "newagent2")
@@ -131,5 +140,9 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(older.sshTarget?.host, "m3")
         XCTAssertEqual(older.sshTarget?.socat, "/opt/homebrew/bin/socat")
         XCTAssertNil(PiEndpoint.command(["/usr/bin/env", "pi", "--mode", "rpc"]).sshTarget)
+        // Options Settings can't rebuild keep the command Custom.
+        XCTAssertNil(PiEndpoint.command(["/usr/bin/ssh", "-p", "2222", "-T", "-o", "BatchMode=yes", "box", "socat - TCP:127.0.0.1:19011"]).sshTarget)
+        XCTAssertNil(PiEndpoint.command(["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-i", "key", "box",
+                                         "socat - TCP:127.0.0.1:19011"]).sshTarget)
     }
 }

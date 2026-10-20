@@ -6,42 +6,28 @@ import TavernCore
 /// The file is still the store; every change is saved to it a moment after it's made.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var draft = Roster(members: [], mailProjects: [])
-    @State private var loaded = false
-    @State private var saveTask: Task<Void, Never>?
+
+    /// Every edit goes straight through `updateRoster` onto the current roster, so a member added
+    /// from the Dashboard meanwhile is never lost to an older copy.
+    private var roster: Binding<Roster> {
+        Binding(get: { model.roster }, set: { new in model.updateRoster { $0 = new } })
+    }
 
     var body: some View {
         TabView {
-            PartySettings(roster: $draft)
+            PartySettings(roster: roster)
                 .tabItem { Label("Party", systemImage: "flag") }
-            MembersSettings(roster: $draft)
+            MembersSettings(roster: roster)
                 .tabItem { Label("Members", systemImage: "person.3") }
-            LoreSettings(roster: $draft)
+            LoreSettings(roster: roster)
                 .tabItem { Label("Lore", systemImage: "books.vertical") }
         }
+        .disabled(model.rosterLoadError != nil)
         .frame(width: 760, height: 560)
         .safeAreaInset(edge: .bottom) {
-            if let error = model.rosterSaveError {
+            if let error = model.rosterLoadError ?? model.rosterSaveError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .tavernFont(.caption).foregroundStyle(.orange).padding(8)
-            }
-        }
-        .onAppear {
-            draft = model.roster
-            loaded = true
-        }
-        // Discovery adds members while Settings is open; take them in.
-        .onChange(of: model.roster) { _, roster in
-            if saveTask == nil { draft = roster }
-        }
-        .onChange(of: draft) { _, updated in
-            guard loaded, updated != model.roster else { return }
-            saveTask?.cancel()
-            saveTask = Task {
-                try? await Task.sleep(for: .milliseconds(600))
-                guard !Task.isCancelled else { return }
-                model.saveRoster(updated)
-                saveTask = nil
             }
         }
     }
@@ -97,7 +83,9 @@ private struct PartySettings: View {
                             }
                         }
                         Button("Add Project") {
-                            roster.mailProjects.append(MailProject(id: "project-\(roster.mailProjects.count + 1)", label: "New project"))
+                            var n = roster.mailProjects.count + 1
+                            while roster.mailProjects.contains(where: { $0.id == "project-\(n)" }) { n += 1 }
+                            roster.mailProjects.append(MailProject(id: "project-\(n)", label: "New project"))
                         }
                     }
                 }
@@ -156,7 +144,12 @@ private struct MembersSettings: View {
                     if !model.discovered.isEmpty || model.discovering {
                         Section("Found on your machines") {
                             ForEach(model.discovered) { agent in
-                                FoundRow(agent: agent) { Task { await add(agent) } }
+                                FoundRow(agent: agent) {
+                                    Task {
+                                        await model.add(agent)
+                                        if model.roster.member(id: agent.id) != nil { selection = agent.id }
+                                    }
+                                }
                             }
                             if model.discovering {
                                 Label("Looking…", systemImage: "antenna.radiowaves.left.and.right").foregroundStyle(.secondary)
@@ -224,14 +217,6 @@ private struct MembersSettings: View {
         }
     }
 
-    /// Adds a found agent to the draft, so it saves with any edits still pending.
-    private func add(_ agent: DiscoveredAgent) async {
-        if !model.hasRosterFile && roster == .fallback { roster.members = [] }
-        let member = await model.member(for: agent, in: roster)
-        roster.members.append(member)
-        selection = member.id
-    }
-
     private func addMember(kind: RosterMember.Kind) {
         let name = kind == .pi ? "New Agent" : "New Member"
         var member = RosterMember(id: roster.newMemberID(for: name), name: name, kind: kind, avatarColor: "#6b5b95")
@@ -261,7 +246,7 @@ private struct FoundRow: View {
                 Text(detail).tavernFont(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Add", action: add)
+            Button("Add", action: add).disabled(model.adding.contains(agent.id))
         }
     }
 
@@ -315,7 +300,7 @@ private struct MemberForm: View {
             }
 
             Section("Reaching them") {
-                TextField("Mail from", text: list(\.mailFrom), prompt: Text("address or @domain, comma separated"))
+                ListField(title: "Mail from", prompt: "address or @domain, comma separated", values: $member.mailFrom)
                     .help("From addresses that mean this member wrote a party mail.")
                 TextField("iMessage", text: optional(\.imessage), prompt: Text("phone or email"))
                 if member.kind == .pi {
@@ -342,14 +327,6 @@ private struct MemberForm: View {
                 set: { member[keyPath: keyPath] = $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 })
     }
 
-    private func list(_ keyPath: WritableKeyPath<RosterMember, [String]?>) -> Binding<String> {
-        Binding(get: { (member[keyPath: keyPath] ?? []).joined(separator: ", ") },
-                set: { text in
-                    let items = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                    member[keyPath: keyPath] = items.isEmpty ? nil : items
-                })
-    }
-
     private func setAvatar(_ url: URL?) {
         do {
             try PartyArt.set("avatars/\(member.id)", from: url)
@@ -358,6 +335,34 @@ private struct MemberForm: View {
             artError = "Couldn't use that image."
         }
         model.objectWillChange.send()
+    }
+}
+
+/// A comma-separated list typed as text and saved when the field is left or Return is pressed,
+/// so a trailing comma survives while the next address is typed.
+private struct ListField: View {
+    let title: String
+    let prompt: String
+    @Binding var values: [String]?
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(title, text: $text, prompt: Text(prompt))
+            .focused($focused)
+            .onAppear { text = joined }
+            .onChange(of: values) { _, _ in if !focused { text = joined } }
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .onSubmit(commit)
+            .onDisappear(perform: commit)
+    }
+
+    private var joined: String { (values ?? []).joined(separator: ", ") }
+
+    private func commit() {
+        let items = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let new = items.isEmpty ? nil : items
+        if new != values { values = new }
     }
 }
 

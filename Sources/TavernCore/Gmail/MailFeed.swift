@@ -36,8 +36,10 @@ public final class MailFeed: ObservableObject {
         reload()
     }
 
-    /// Wires the real Gmail API with the client file and Keychain token on this Mac.
-    public static func live(store: EventStore, roster: Roster) async -> MailFeed {
+    /// Wires the real Gmail API with the client file and Keychain token on this Mac. Each sync
+    /// reads `roster()` for authors and projects; the label stays the one Tavern opened with.
+    public static func live(store: EventStore, roster current: @escaping @MainActor () -> Roster) async -> MailFeed {
+        let roster = current()
         MailItem.reattribute(store: store, roster: roster)
         guard let client = GmailOAuth.Client.load() else {
             return MailFeed(store: store, oauth: nil, signedIn: false) { nil }
@@ -46,7 +48,7 @@ public final class MailFeed: ObservableObject {
         let signedIn = await oauth.isSignedIn
         return MailFeed(store: store, oauth: oauth, signedIn: signedIn) {
             let http = GmailURLSessionHTTP { try await oauth.token() }
-            return GmailSync(api: GmailAPI(http: http), store: store, roster: roster)
+            return GmailSync(api: GmailAPI(http: http), store: store, roster: current(), labelName: roster.mailLabelName)
         }
     }
 
@@ -135,6 +137,11 @@ public final class MailFeed: ObservableObject {
     public func stopPolling() {
         polling?.cancel()
         polling = nil
+    }
+
+    /// After a roster edit: gives stored mail without an author one by the new rules, and re-lists.
+    public func rosterChanged(_ roster: Roster) {
+        if MailItem.reattribute(store: store, roster: roster) > 0 { reload() }
     }
 
     private func reload() {
