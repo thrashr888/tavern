@@ -1,0 +1,63 @@
+# Update the tavern cask in thrashr888/homebrew-tap on every release.
+# Releases are cut locally by scripts/release.sh (`gh release create` fires
+# the release event); workflow_dispatch covers re-runs and backfills.
+# Needs the HOMEBREW_TAP_TOKEN secret: a token that can write to homebrew-tap.
+name: Homebrew
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.0.5)
+        required: true
+
+jobs:
+  cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download zip and compute SHA256
+        id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          gh release download "$TAG" --repo thrashr888/tavern --pattern "Tavern-${VERSION}-macos-arm64.zip"
+          echo "darwin_arm64=$(sha256sum "Tavern-${VERSION}-macos-arm64.zip" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew cask
+        uses: thrashr888/homebrew-tap@main
+        with:
+          type: cask
+          formula: tavern
+          tag: ${{ steps.tag.outputs.tag }}
+          tap-token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          darwin-arm64-sha256: ${{ steps.sha.outputs.darwin_arm64 }}
+          template: |
+            cask "tavern" do
+              version "${VERSION}"
+              sha256 "${SHA_DARWIN_ARM64}"
+
+              url "https://github.com/thrashr888/tavern/releases/download/${TAG}/Tavern-${VERSION}-macos-arm64.zip"
+              name "Tavern"
+              desc "Home for a party of AI agents: Pi agents, hosted members, mail and goals"
+              homepage "https://github.com/thrashr888/tavern"
+
+              depends_on arch: :arm64
+              depends_on macos: :sonoma
+
+              app "Tavern.app"
+
+              zap trash: [
+                "~/Library/Application Support/Tavern",
+                "~/Library/Preferences/dev.thrashr888.tavern.plist",
+              ]
+            end
