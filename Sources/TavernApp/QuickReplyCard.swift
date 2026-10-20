@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TavernCore
 
@@ -9,37 +10,108 @@ extension View {
     }
 }
 
-/// Opens after a short hover and stays while the pointer is over the row or the card, or while
-/// a reply is being written.
+/// Opens after the pointer rests on the row (like a tooltip) and stays while it's over the row or
+/// the card, or while a reply is being written. A click on the row cancels a card that hasn't
+/// opened yet and closes one that has, and the card never takes that click: it's a non-modal
+/// popover, so the row still opens its page on the first click.
 private struct QuickCardModifier: ViewModifier {
     let member: RosterMember
+    @EnvironmentObject private var model: AppModel
     @State private var overRow = false
     @State private var overCard = false
     @State private var writing = false
     @State private var showing = false
+    /// Set by a click on the row; no card until the pointer leaves and comes back.
+    @State private var clicked = false
+    /// Bumps on every change, so a delayed open or close from an older hover does nothing.
+    @State private var generation = 0
+    @State private var monitor: Any?
 
     func body(content: Content) -> some View {
         content
             .onHover { inside in
                 overRow = inside
+                if !inside { clicked = false }
                 settle()
             }
-            .popover(isPresented: $showing, arrowEdge: .trailing) {
-                QuickReplyCard(member: member, writing: $writing)
-                    .onHover { inside in
-                        overCard = inside
-                        settle()
+            .background(
+                NonModalPopover(isPresented: $showing) {
+                    QuickReplyCard(member: member, writing: $writing)
+                        .environmentObject(model)
+                        .onHover { inside in
+                            overCard = inside
+                            settle()
+                        }
+                }
+            )
+            .onAppear {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+                    if overRow {
+                        clicked = true
+                        generation += 1
+                        showing = false
                     }
+                    return event
+                }
+            }
+            .onDisappear {
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
             }
     }
 
     private func settle() {
-        let wantsOpen = overRow || overCard
+        generation += 1
+        let mine = generation
+        let wantsOpen = (overRow && !clicked) || overCard
         Task {
-            try? await Task.sleep(for: .milliseconds(wantsOpen ? 500 : 350))
-            if wantsOpen, overRow || overCard { showing = true }
+            try? await Task.sleep(for: .milliseconds(wantsOpen ? 700 : 350))
+            guard mine == generation else { return }
+            if wantsOpen, (overRow && !clicked) || overCard { showing = true }
             if !wantsOpen, !overRow, !overCard, !writing { showing = false }
         }
+    }
+}
+
+/// An NSPopover that doesn't close on, or swallow, clicks outside it (SwiftUI's `.popover` is
+/// transient: the first click outside only dismisses it).
+private struct NonModalPopover<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    @ViewBuilder let content: () -> Content
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let popover = context.coordinator.popover
+        if isPresented {
+            if let host = popover.contentViewController as? NSHostingController<Content> {
+                host.rootView = content()
+            } else {
+                let host = NSHostingController(rootView: content())
+                host.sizingOptions = .preferredContentSize
+                popover.contentViewController = host
+            }
+            if !popover.isShown, view.window != nil {
+                popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxX)
+            }
+        } else if popover.isShown {
+            popover.performClose(nil)
+        }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.popover.close()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        let popover: NSPopover = {
+            let popover = NSPopover()
+            popover.behavior = .applicationDefined
+            popover.animates = false
+            return popover
+        }()
     }
 }
 
