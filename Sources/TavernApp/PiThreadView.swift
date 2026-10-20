@@ -512,7 +512,7 @@ struct WorkRow: View {
                     ForEach(work.kinds.prefix(4), id: \.self) { kind in
                         Image(systemName: kind.symbol).imageScale(.small)
                     }
-                    Text(work.summary)
+                    WorkSummary(work: work)
                     Image(systemName: "chevron.right")
                         .imageScale(.small)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -552,16 +552,52 @@ struct StepList: View {
                             .foregroundStyle(step.failed ? Color.red : Color.secondary)
                     }
                     Spacer(minLength: 8)
-                    if let duration = step.duration {
-                        Text(PiWork.format(duration)).tavernFont(.caption).foregroundStyle(.secondary).monospacedDigit()
-                    } else {
-                        ProgressView().controlSize(.mini)
-                    }
+                    StepDuration(step: step)
                 }
                 .tavernFont(.callout)
                 .padding(.vertical, 5)
             }
         }
+    }
+}
+
+/// "Worked 48s · 9 steps", counting up while the work runs.
+struct WorkSummary: View {
+    let work: PiWork
+
+    var body: some View {
+        if work.isRunning {
+            TimelineView(.periodic(from: work.started ?? Date(), by: 0.1)) { context in
+                Text(work.summary(at: context.date)).monospacedDigit()
+            }
+        } else {
+            Text(work.summary)
+        }
+    }
+}
+
+/// A step's duration, right-aligned; a running step counts up live.
+struct StepDuration: View {
+    let step: PiStep
+
+    var body: some View {
+        if step.isRunning {
+            TimelineView(.periodic(from: step.started, by: 0.1)) { context in
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    label(step.elapsed(at: context.date))
+                }
+            }
+        } else {
+            label(step.elapsed(at: Date()))
+        }
+    }
+
+    private func label(_ seconds: TimeInterval) -> some View {
+        Text(PiWork.format(seconds))
+            .tavernFont(.caption)
+            .foregroundStyle(step.failed ? Color.red : Color.secondary)
+            .monospacedDigit()
     }
 }
 
@@ -575,6 +611,7 @@ extension PiStep.Kind {
         case .search: return "magnifyingglass"
         case .webSearch: return "globe"
         case .fetch: return "arrow.down.doc"
+        case .thought: return "brain"
         case .other: return "wrench.and.screwdriver"
         }
     }

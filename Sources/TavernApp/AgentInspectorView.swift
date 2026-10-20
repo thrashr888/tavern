@@ -291,7 +291,7 @@ private struct ActivitySection: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Activity").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
             if let work = session.liveWork ?? latestWork {
-                Text(work.summary).tavernFont(.callout, weight: .semibold)
+                WorkSummary(work: work).tavernFont(.callout, weight: .semibold)
                 if let started = work.started {
                     Text(started.formatted(date: .abbreviated, time: .shortened))
                         .tavernFont(.caption).foregroundStyle(.secondary)

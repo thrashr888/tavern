@@ -14,7 +14,7 @@ public struct PiToolCall: Equatable, Sendable {
 }
 
 /// One step of a turn's work, as the collapsed "Worked 48s · 9 steps" row and the Activity list
-/// show it: "Ran ls -la" (Shell), "Read plan.md" (Read), with its duration.
+/// show it: "Ran ls -la" (Shell), "Read plan.md" (Read), "Planning the fix" (Thought), with its duration.
 public struct PiStep: Equatable, Identifiable, Sendable {
     public enum Kind: String, Sendable {
         case shell = "Shell"
@@ -24,6 +24,7 @@ public struct PiStep: Equatable, Identifiable, Sendable {
         case search = "Search"
         case webSearch = "Web Search"
         case fetch = "Fetch"
+        case thought = "Thought"
         case other = "Tool"
     }
 
@@ -50,8 +51,25 @@ public struct PiStep: Equatable, Identifiable, Sendable {
         self.init(id: call.id, toolName: call.name, kind: kind, title: title, started: started)
     }
 
+    /// A thinking block the model wrote before calling tools, titled by its first line.
+    public init(thoughtID id: String, thinking: String, started: Date, ended: Date? = nil) {
+        self.init(id: id, toolName: "thinking", kind: .thought, title: Self.thoughtSummary(thinking), started: started, ended: ended)
+    }
+
     public var duration: TimeInterval? { ended.map { max(0, $0.timeIntervalSince(started)) } }
+    /// How long the step has run as of `now`: its duration once ended, else the time so far.
+    public func elapsed(at now: Date) -> TimeInterval { duration ?? max(0, now.timeIntervalSince(started)) }
     public var isRunning: Bool { ended == nil }
+
+    /// The first line of a thought, without Markdown emphasis or heading marks: models often open
+    /// with a bolded heading ("**Planning the fix**"). "Thought" when there's nothing to show.
+    public static func thoughtSummary(_ thinking: String) -> String {
+        let line = thinking.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "*_#> ").union(.whitespaces)) }
+            .first { !$0.isEmpty } ?? ""
+        if line.isEmpty { return "Thought" }
+        return line.count > 80 ? String(line.prefix(79)) + "…" : line
+    }
 
     /// A readable line for Pi's built-in tools; anything else is "Ran <tool>".
     public static func describe(toolName: String, arguments: JSONValue) -> (Kind, String) {
@@ -112,17 +130,27 @@ public struct PiWork: Equatable, Identifiable, Sendable {
         return seen
     }
 
-    public var summary: String {
+    public var summary: String { summary(at: nil) }
+
+    /// "Worked 48s · 9 steps"; while running, "Working 12s · 3 steps" counted to `now`.
+    public func summary(at now: Date?) -> String {
         let count = "\(steps.count) step\(steps.count == 1 ? "" : "s")"
-        guard let duration else { return "Working · \(count)" }
-        return "Worked \(PiWork.format(duration)) · \(count)"
+        if isRunning || duration == nil {
+            guard let now, let started else { return "Working · \(count)" }
+            return "Working \(PiWork.format(now.timeIntervalSince(started))) · \(count)"
+        }
+        return "Worked \(PiWork.format(duration ?? 0)) · \(count)"
     }
 
-    /// "0.4s", "12s", "1m 15s".
+    /// "0.4s", "12s", "1m 15s", "1h 2m".
     public static func format(_ seconds: TimeInterval) -> String {
-        if seconds < 10 { return String(format: "%.1fs", seconds) }
+        let seconds = max(0, seconds)
+        // Rounding to a tenth can reach 10.0, which reads better as "10s".
+        if (seconds * 10).rounded() < 100 { return String(format: "%.1fs", seconds) }
         let whole = Int(seconds.rounded())
-        return whole < 60 ? "\(whole)s" : "\(whole / 60)m \(whole % 60)s"
+        if whole < 60 { return "\(whole)s" }
+        if whole < 3600 { return "\(whole / 60)m \(whole % 60)s" }
+        return "\(whole / 3600)h \(whole % 3600 / 60)m"
     }
 }
 
@@ -144,11 +172,13 @@ public enum PiThreadRow: Equatable, Identifiable, Sendable {
 
 public enum PiActivity {
     /// Folds tool results (and the call-only assistant turns that asked for them) into work rows.
-    /// A step's duration runs from the assistant turn that called it to its result.
+    /// A step's duration runs from the assistant turn that called it to its result; a call-only
+    /// turn's thinking becomes a thought step, running from the item before it to the turn.
     public static func rows(from items: [TranscriptItem]) -> [PiThreadRow] {
         var rows: [PiThreadRow] = []
         var calls: [String: (call: PiToolCall, at: Date)] = [:]
         var steps: [PiStep] = []
+        var previous: Date?
 
         func flush() {
             guard !steps.isEmpty else { return }
@@ -157,6 +187,7 @@ public enum PiActivity {
         }
 
         for item in items {
+            defer { previous = item.date }
             for call in item.toolCalls { calls[call.id] = (call, item.date) }
             switch item.role {
             case .tool:
@@ -176,8 +207,11 @@ public enum PiActivity {
                     rows.append(.card(id: item.id, card))
                 }
             case .assistant where item.text.isEmpty && !item.toolCalls.isEmpty:
-                // A turn that only called tools: its steps carry it.
-                continue
+                // A turn that only called tools: its steps carry it, after its thinking.
+                if !item.thinking.isEmpty {
+                    steps.append(PiStep(thoughtID: "thought:\(item.id)", thinking: item.thinking,
+                                        started: min(previous ?? item.date, item.date), ended: item.date))
+                }
             default:
                 flush()
                 rows.append(.message(item))

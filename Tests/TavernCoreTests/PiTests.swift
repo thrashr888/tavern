@@ -166,6 +166,64 @@ final class PiEntriesTests: XCTestCase {
         XCTAssertEqual(PiWork.format(75), "1m 15s")
     }
 
+    func testDurationFormatting() {
+        XCTAssertEqual(PiWork.format(0), "0.0s")
+        XCTAssertEqual(PiWork.format(-2), "0.0s")
+        XCTAssertEqual(PiWork.format(0.7), "0.7s")
+        XCTAssertEqual(PiWork.format(4.34), "4.3s")
+        XCTAssertEqual(PiWork.format(9.94), "9.9s")
+        XCTAssertEqual(PiWork.format(9.96), "10s")
+        XCTAssertEqual(PiWork.format(12.4), "12s")
+        XCTAssertEqual(PiWork.format(59.6), "1m 0s")
+        XCTAssertEqual(PiWork.format(3599), "59m 59s")
+        XCTAssertEqual(PiWork.format(3725), "1h 2m")
+    }
+
+    func testRunningStepsCountUpAndFailedStepsKeepTheirDuration() {
+        let start = Date(timeIntervalSince1970: 1000)
+        var step = PiStep(id: "c1", toolName: "bash", kind: .shell, title: "Ran make", started: start)
+        XCTAssertNil(step.duration)
+        XCTAssertEqual(step.elapsed(at: start.addingTimeInterval(4.3)), 4.3, accuracy: 0.001)
+        step.ended = start.addingTimeInterval(0.7)
+        step.failed = true
+        XCTAssertEqual(step.elapsed(at: start.addingTimeInterval(60)), 0.7, accuracy: 0.001)
+        let running = PiWork(id: "w", steps: [PiStep(id: "c2", toolName: "read", kind: .read, title: "Read a", started: start)])
+        XCTAssertEqual(running.summary, "Working · 1 step")
+        XCTAssertEqual(running.summary(at: start.addingTimeInterval(12)), "Working 12s · 1 step")
+    }
+
+    func testThoughtSummaries() {
+        XCTAssertEqual(PiStep.thoughtSummary("**Planning the fix**\n\nFirst I'll read the file."), "Planning the fix")
+        XCTAssertEqual(PiStep.thoughtSummary("\n\n  ## Checking tests\nmore"), "Checking tests")
+        XCTAssertEqual(PiStep.thoughtSummary("   \n "), "Thought")
+        XCTAssertEqual(PiStep.thoughtSummary(String(repeating: "x", count: 100)).count, 80)
+    }
+
+    func testCallOnlyTurnThinkingBecomesATimedThoughtStep() {
+        let entries: [JSONValue] = [
+            ["type": "message", "id": "u1", "timestamp": "2026-10-15T06:00:00Z",
+             "message": ["role": "user", "content": "fix the build"]],
+            ["type": "message", "id": "a1", "timestamp": "2026-10-15T06:00:04Z",
+             "message": ["role": "assistant", "content": .array([
+                 ["type": "thinking", "thinking": "**Reading the error**\nIt fails in Package.swift."],
+                 ["type": "toolCall", "id": "c1", "name": "read", "arguments": ["path": "Package.swift"]],
+             ])]],
+            ["type": "message", "id": "r1", "timestamp": "2026-10-15T06:00:05Z",
+             "message": ["role": "toolResult", "toolCallId": "c1", "toolName": "read", "content": .array([])]],
+            ["type": "message", "id": "a2", "timestamp": "2026-10-15T06:00:09Z",
+             "message": ["role": "assistant", "content": .array([["type": "text", "text": "Fixed."]])]],
+        ]
+        let items = PiEntries.events(from: entries, sessionID: "s1", agentID: "flint").compactMap(TranscriptItem.init(event:))
+        let rows = PiActivity.rows(from: items)
+        XCTAssertEqual(rows.count, 3)
+        guard case .work(let work) = rows[1] else { return XCTFail("expected a work row") }
+        XCTAssertEqual(work.steps.map(\.kind), [.thought, .read])
+        XCTAssertEqual(work.steps.map(\.title), ["Reading the error", "Read Package.swift"])
+        XCTAssertEqual(work.steps[0].duration, 4)
+        XCTAssertEqual(work.steps[1].duration, 1)
+        XCTAssertEqual(work.summary, "Worked 5.0s · 2 steps")
+    }
+
     func testTimestampsParseWithAndWithoutFraction() {
         XCTAssertNotNil(PiEntries.parseTimestamp("2026-10-15T05:00:00.123Z"))
         XCTAssertNotNil(PiEntries.parseTimestamp("2026-10-15T05:00:00Z"))
@@ -312,12 +370,21 @@ final class PiAgentSessionTests: XCTestCase {
         ]))
         XCTAssertEqual(session.streamingThinking, "Let me look")
         XCTAssertTrue(session.isThinking)
+        await session.handle(.event(type: "message_update", raw: [
+            "type": "message_update",
+            "assistantMessageEvent": ["type": "thinking_delta", "delta": " at the logs\nThen fix it"],
+        ]))
+        // The live step list shows the thought running, titled by its first line.
+        XCTAssertEqual(session.liveSteps.map(\.kind), [.thought])
+        XCTAssertEqual(session.liveSteps.first?.title, "Let me look at the logs")
+        XCTAssertEqual(session.liveSteps.first?.isRunning, true)
 
         await session.handle(.event(type: "message_update", raw: [
             "type": "message_update",
             "assistantMessageEvent": ["type": "text_delta", "delta": "Found it"],
         ]))
         XCTAssertFalse(session.isThinking)
+        XCTAssertEqual(session.liveSteps.first?.isRunning, false)
 
         await session.handle(.event(type: "agent_settled", raw: ["type": "agent_settled"]))
         XCTAssertEqual(session.streamingThinking, "")
