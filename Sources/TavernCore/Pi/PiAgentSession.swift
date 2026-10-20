@@ -107,6 +107,8 @@ public final class PiAgentSession: ObservableObject {
     private var wantsConnection = false
     private var attempts = 0
     private var reconnectTask: Task<Void, Never>?
+    /// Where the running live thought starts in `streamingThinking`.
+    private var liveThoughtFrom: String.Index?
 
     public func connect() async {
         wantsConnection = true
@@ -393,18 +395,23 @@ public final class PiAgentSession: ObservableObject {
                 presence = .working
                 turnFailed = false
             case "agent_end", "message_end":
+                endLiveThought()
                 if raw["message"]?["stopReason"]?.stringValue == "error" { turnFailed = true }
             case "message_update":
                 let update = raw["assistantMessageEvent"]
                 let delta = update?["delta"]?.stringValue ?? ""
                 switch update?["type"]?.stringValue ?? "" {
-                case "text_delta": streamingText += delta
-                case "thinking_delta": streamingThinking += delta
+                case "text_delta":
+                    endLiveThought()
+                    streamingText += delta
+                case "thinking_delta":
+                    updateLiveThought(adding: delta)
                 default: break
                 }
             case "tool_execution_start":
                 let name = raw["toolName"]?.stringValue ?? "tool"
                 currentTool = name
+                endLiveThought()
                 let call = PiToolCall(id: raw["toolCallId"]?.stringValue ?? UUID().uuidString, name: name,
                                       arguments: raw["args"] ?? .null)
                 liveSteps.append(PiStep(call: call, started: Date()))
@@ -440,6 +447,23 @@ public final class PiAgentSession: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Thinking shows in the live step list as a running thought step, titled by its first line,
+    /// until the model moves on to text or a tool call.
+    private func updateLiveThought(adding delta: String) {
+        if liveSteps.last?.kind != .thought || liveSteps.last?.isRunning != true {
+            liveThoughtFrom = streamingThinking.endIndex
+            liveSteps.append(PiStep(thoughtID: "thought:\(UUID().uuidString)", thinking: "", started: Date()))
+        }
+        streamingThinking += delta
+        let from = liveThoughtFrom.flatMap { $0 <= streamingThinking.endIndex ? $0 : nil } ?? streamingThinking.startIndex
+        liveSteps[liveSteps.count - 1].title = PiStep.thoughtSummary(String(streamingThinking[from...].prefix(400)))
+    }
+
+    private func endLiveThought() {
+        guard let index = liveSteps.indices.last, liveSteps[index].kind == .thought, liveSteps[index].isRunning else { return }
+        liveSteps[index].ended = Date()
     }
 
     private func reloadTranscript() {

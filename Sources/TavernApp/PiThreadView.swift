@@ -129,7 +129,7 @@ struct PiThreadView: View {
                         TranscriptRow(item: TranscriptItem(
                             id: "streaming", role: .assistant, text: session.streamingText,
                             thinking: session.streamingThinking, date: Date()
-                        ), thinkingExpanded: session.streamingText.isEmpty)
+                        ), thinkingExpanded: session.streamingText.isEmpty, showsLinks: false)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -263,6 +263,8 @@ struct TranscriptRow: View {
     let item: TranscriptItem
     /// Live thinking starts open so a long think visibly moves; stored thinking starts collapsed.
     var thinkingExpanded = false
+    /// Preview chips for the message's links; off while a reply streams in, half-written.
+    var showsLinks = true
     /// The user's reactions to this reply; `onReact` is nil where reacting doesn't apply.
     var reactions: [Reaction] = []
     var onReact: ((String) -> Void)? = nil
@@ -286,6 +288,9 @@ struct TranscriptRow: View {
                 VStack(alignment: .trailing, spacing: 6) {
                     if !parts.paths.isEmpty { InlineImages(paths: parts.paths) }
                     if !parts.text.isEmpty { userBubble(parts.text) }
+                    if showsLinks, case let urls = LinkPreviewPolicy.previewable(in: parts.text), !urls.isEmpty {
+                        LinkChipRow(urls: urls, trailing: true)
+                    }
                 }
             }
         case .assistant:
@@ -295,6 +300,9 @@ struct TranscriptRow: View {
                 }
                 if !item.text.isEmpty {
                     MarkdownText(text: item.text)
+                }
+                if showsLinks, case let urls = LinkPreviewPolicy.previewable(in: item.text), !urls.isEmpty {
+                    LinkChipRow(urls: urls)
                 }
                 if let onReact, !reactions.isEmpty {
                     ReactionChips(reactions: reactions, onTap: onReact)
@@ -534,7 +542,7 @@ struct WorkRow: View {
                     ForEach(work.kinds.prefix(4), id: \.self) { kind in
                         Image(systemName: kind.symbol).imageScale(.small)
                     }
-                    Text(work.summary)
+                    WorkSummary(work: work)
                     Image(systemName: "chevron.right")
                         .imageScale(.small)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -574,16 +582,52 @@ struct StepList: View {
                             .foregroundStyle(step.failed ? Color.red : Color.secondary)
                     }
                     Spacer(minLength: 8)
-                    if let duration = step.duration {
-                        Text(PiWork.format(duration)).tavernFont(.caption).foregroundStyle(.secondary).monospacedDigit()
-                    } else {
-                        ProgressView().controlSize(.mini)
-                    }
+                    StepDuration(step: step)
                 }
                 .tavernFont(.callout)
                 .padding(.vertical, 5)
             }
         }
+    }
+}
+
+/// "Worked 48s · 9 steps", counting up while the work runs.
+struct WorkSummary: View {
+    let work: PiWork
+
+    var body: some View {
+        if work.isRunning {
+            TimelineView(.periodic(from: work.started ?? Date(), by: 0.1)) { context in
+                Text(work.summary(at: context.date)).monospacedDigit()
+            }
+        } else {
+            Text(work.summary)
+        }
+    }
+}
+
+/// A step's duration, right-aligned; a running step counts up live.
+struct StepDuration: View {
+    let step: PiStep
+
+    var body: some View {
+        if step.isRunning {
+            TimelineView(.periodic(from: step.started, by: 0.1)) { context in
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    label(step.elapsed(at: context.date))
+                }
+            }
+        } else {
+            label(step.elapsed(at: Date()))
+        }
+    }
+
+    private func label(_ seconds: TimeInterval) -> some View {
+        Text(PiWork.format(seconds))
+            .tavernFont(.caption)
+            .foregroundStyle(step.failed ? Color.red : Color.secondary)
+            .monospacedDigit()
     }
 }
 
@@ -597,6 +641,7 @@ extension PiStep.Kind {
         case .search: return "magnifyingglass"
         case .webSearch: return "globe"
         case .fetch: return "arrow.down.doc"
+        case .thought: return "brain"
         case .other: return "wrench.and.screwdriver"
         }
     }
