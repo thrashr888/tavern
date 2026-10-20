@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// An MCP Apps card (SEP-1865) that came with a tool result: which server's `ui://` resource
@@ -54,24 +55,24 @@ public struct ToolCardPage: Equatable, Sendable {
 }
 
 /// Card pages kept on disk, so a card in an old message still shows after its server stops
-/// offering it (or while the agent is offline). Keyed by server and `ui://` URI.
+/// offering it (or while the agent is offline). Keyed by agent, server and `ui://` URI, so one
+/// agent's server can never supply the page for another agent's card.
 public enum ToolCardCache {
     static var folder: URL? { TavernPaths.file("cards") }
 
-    static func file(_ card: ToolCard) -> URL? {
-        let key = "\(card.server)|\(card.resourceUri)".utf8.reduce(into: UInt64(14_695_981_039_346_656_037)) { hash, byte in
-            hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
-        }
-        return folder?.appendingPathComponent(String(key, radix: 16) + ".json")
+    static func file(_ card: ToolCard, agentID: String) -> URL? {
+        let key = SHA256.hash(data: Data("\(agentID)\u{0}\(card.server)\u{0}\(card.resourceUri)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return folder?.appendingPathComponent(key + ".json")
     }
 
-    public static func load(_ card: ToolCard) -> ToolCardPage? {
-        guard let url = file(card), let data = try? Data(contentsOf: url), let json = try? JSONValue.decode(data) else { return nil }
+    public static func load(_ card: ToolCard, agentID: String) -> ToolCardPage? {
+        guard let url = file(card, agentID: agentID), let data = try? Data(contentsOf: url), let json = try? JSONValue.decode(data) else { return nil }
         return ToolCardPage(json: json)
     }
 
-    public static func save(_ page: ToolCardPage, for card: ToolCard) {
-        guard let url = file(card), let folder else { return }
+    public static func save(_ page: ToolCardPage, for card: ToolCard, agentID: String) {
+        guard let url = file(card, agentID: agentID), let folder else { return }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let json: JSONValue = ["html": .string(page.html),
                                "meta": ["prefersBorder": .bool(page.prefersBorder),
