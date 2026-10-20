@@ -8,9 +8,8 @@ import TavernCore
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selection: Page?
-    @State private var stats = DashboardStats()
-
-    @State private var containersRunning: Int?
+    private var stats: DashboardStats { model.dashboardStats ?? DashboardStats() }
+    private var containersRunning: Int? { model.containersRunning }
 
     /// Distinct open tickets that some party member is on.
     private var agentTicketCount: Int {
@@ -119,18 +118,13 @@ struct DashboardView: View {
         .task { _ = try? await model.loadOpenIssues() }
         .task {
             while !Task.isCancelled {
-                var running = 0
-                var any = false
-                for host in DockerHost.hosts(for: model.roster) {
-                    if let containers = try? await host.containers() { running += containers.filter(\.isRunning).count; any = true }
-                }
-                containersRunning = any ? running : nil
+                await model.refreshContainers(maxAge: 30)
                 try? await Task.sleep(for: .seconds(60))
             }
         }
         .task {
             while !Task.isCancelled {
-                stats = DashboardStats(store: model.store, mail: model.mail, roster: model.roster)
+                model.dashboardStats = DashboardStats(store: model.store, mail: model.mail, roster: model.roster)
                 // Mail loads a moment after launch; check again soon until it has.
                 try? await Task.sleep(for: .seconds(stats.threadCount == 0 ? 3 : 30))
             }

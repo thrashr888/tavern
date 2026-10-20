@@ -490,13 +490,23 @@ private struct GoalDetail: View {
             .frame(maxWidth: 760, alignment: .leading)
         }
         .task {
+            // What was read last time shows at once; fresh reads replace it.
+            if detail == nil { detail = model.issueDetails[issue.identifier] }
+            if states.isEmpty { states = model.linearStates }
+            if projects.isEmpty { projects = model.linearProjects }
             async let detailTask = linear.detail(issue.identifier)
             async let statesTask = linear.workflowStates()
             async let projectsTask = linear.projects()
-            do { detail = try await detailTask } catch { self.error = String(describing: error) }
+            do {
+                let fresh = try await detailTask
+                detail = fresh
+                model.issueDetails[issue.identifier] = fresh
+            } catch {
+                if detail == nil { self.error = String(describing: error) }
+            }
             await loadComments()
-            states = (try? await statesTask) ?? []
-            projects = (try? await projectsTask) ?? []
+            if let fresh = try? await statesTask { states = fresh; model.linearStates = fresh }
+            if let fresh = try? await projectsTask { projects = fresh; model.linearProjects = fresh }
         }
         .sheet(item: $sendTo) { agent in
             SendToAgentSheet(agent: agent, prompt: issue.agentPrompt(description: detail?.description ?? "")) { text in

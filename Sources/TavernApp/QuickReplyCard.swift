@@ -109,6 +109,7 @@ private struct IMessageQuickReply: View {
     let member: RosterMember
     let handle: String
     @Binding var writing: Bool
+    @EnvironmentObject private var model: AppModel
     @State private var latest: IMessage?
     @State private var draft = ""
 
@@ -133,7 +134,10 @@ private struct IMessageQuickReply: View {
     }
 
     private func load() async {
-        latest = try? await CiderMessages().history(with: handle, days: 7).last(where: { $0.tapback == nil })
+        if latest == nil { latest = model.imessageHistory[handle]?.last(where: { $0.tapback == nil }) }
+        guard let history = try? await CiderMessages().history(with: handle, days: 7) else { return }
+        model.imessageHistory[handle] = history
+        latest = history.last(where: { $0.tapback == nil })
     }
 }
 

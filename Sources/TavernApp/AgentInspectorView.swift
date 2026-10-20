@@ -165,7 +165,7 @@ struct AgentTasksSection: View {
 private struct AgentServices: View {
     let host: DockerHost
     @EnvironmentObject private var model: AppModel
-    @State private var result: Result<[DockerContainer], DockerError>?
+    private var result: Result<[DockerContainer], DockerError>? { model.containerResults[host.id] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -201,9 +201,7 @@ private struct AgentServices: View {
         }
         .task(id: host.id) {
             while !Task.isCancelled {
-                do { result = .success(try await host.containers()) }
-                catch let error as DockerError { result = .failure(error) }
-                catch { result = .failure(DockerError(message: error.localizedDescription)) }
+                await model.refreshContainers(maxAge: 25)
                 try? await Task.sleep(for: .seconds(30))
             }
         }
