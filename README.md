@@ -58,12 +58,20 @@ scripts/bundle.sh      # builds a release Tavern.app into ~/Applications and ope
 
 ## Configure
 
-Everything about your party lives in `~/Library/Application Support/Tavern/`, not in this repo:
+Everything about your party lives in `~/Library/Application Support/Tavern/`, not in this repo.
+Tavern > Settings (⌘,) edits most of it: the party's name and image, members with their classes,
+colors, avatars and connections, the mail label, the Linear team and Lore links.
 
-- `roster.json`: the members, their machines and endpoints, the mail label, the Linear team,
-  project owners and Lore links. Start from [docs/roster.example.json](docs/roster.example.json).
-  Without it Tavern shows a two-member example party.
-- `portrait.png` and `avatars/<id>.png`: optional party art. Members without art get an initial.
+Tavern also finds Pi agents for you. Each [pi-bundle](https://github.com/thrashr888/pi-bundle)
+install leaves an agent card in `~/.config/pi-bundle/agents/`; Tavern reads the cards on this Mac,
+and over your own SSH on the online Macs and Linux boxes of your tailnet, then offers "Found Ember
+on M3. Add?" on the Dashboard and in Settings. Without Tailscale it looks on this Mac only.
+
+- `roster.json`: what Settings saves. Keys it doesn't know are kept, and the first save leaves the
+  old file as `roster.json.before-settings`. A few fields are still file-only (owner maps, trusted
+  senders, sign-offs); see [docs/roster.example.json](docs/roster.example.json). Without the file
+  Tavern shows a two-member example party.
+- `portrait.png` and `avatars/<id>.png`: party art, set in Settings. Members without art get an initial.
 - `gmail-oauth-client.json`: a desktop OAuth client from your own Google Cloud project, for the
   mail feed (scope `gmail.modify`: Tavern reads, and archives a thread when you ask; it never
   sends or deletes). Tavern stores the token in your keychain.

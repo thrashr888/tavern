@@ -29,6 +29,8 @@ struct DashboardView: View {
                         .foregroundStyle(.orange)
                 }
 
+                SetupBanner()
+
                 if let mail = model.mail {
                     NeedsYouSection(mail: mail, selection: $selection)
                 }
@@ -326,6 +328,42 @@ private struct NeedsRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+}
+
+/// "Found Ember on M3. Add?" for each pi-bundle agent discovery turned up, and on a first launch
+/// (no roster.json yet) a pointer to Settings.
+private struct SetupBanner: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !model.hasRosterFile {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles").foregroundStyle(.tint)
+                    Text(model.discovered.isEmpty
+                         ? "This is an example party. Name yours and add its members in Settings."
+                         : "This is an example party. Add the agents Tavern found, or set it up in Settings.")
+                    Spacer()
+                    Button("Open Settings") { openSettings() }.buttonStyle(PillButtonStyle())
+                }
+            }
+            ForEach(model.discovered) { agent in
+                HStack(spacing: 10) {
+                    Circle().fill(Color(hex: agent.card.avatarColor ?? "#6b5b95")).frame(width: 26, height: 26)
+                        .overlay(Text(String(agent.card.name.prefix(1))).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white))
+                    Text("Found **\(agent.card.name)** on \(agent.machine).") + Text(agent.answering == false ? " Its host isn't answering yet." : "")
+                    Spacer()
+                    Button("Not Now") { model.dismiss(agent) }.buttonStyle(.borderless)
+                    Button("Add") { Task { await model.add(agent) } }.buttonStyle(PillButtonStyle(selected: true))
+                }
+            }
+        }
+        .padding(model.hasRosterFile && model.discovered.isEmpty ? 0 : 14)
+        .background(model.hasRosterFile && model.discovered.isEmpty ? Color.clear : Color.accentColor.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 12))
+        .task { if model.discovered.isEmpty { await model.discoverAgents() } }
     }
 }
 

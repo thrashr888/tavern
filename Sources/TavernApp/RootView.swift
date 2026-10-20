@@ -376,6 +376,28 @@ enum PartyArt {
     static var portrait: NSImage? { image("portrait") }
     static func avatar(_ id: String) -> NSImage? { image("avatars/\(id)") }
 
+    /// Forgets loaded art, after Settings changes it.
+    static func reload() { cache.removeAll() }
+
+    /// Sets `portrait` or `avatars/<id>` from an image file the user picked (saved as PNG), or
+    /// removes it when `source` is nil.
+    static func set(_ name: String, from source: URL?) throws {
+        guard let base = TavernPaths.base else { return }
+        let fm = FileManager.default
+        for ext in ["png", "jpg", "jpeg", "heic"] {
+            try? fm.removeItem(at: base.appendingPathComponent("\(name).\(ext)"))
+        }
+        defer { reload() }
+        guard let source else { return }
+        guard let image = NSImage(contentsOf: source), let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let destination = base.appendingPathComponent("\(name).png")
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try png.write(to: destination, options: .atomic)
+    }
+
     private static func image(_ name: String) -> NSImage? {
         if let hit = cache[name] { return hit }
         var found: NSImage?
