@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Cuts a Tavern release from this Mac (Apple silicon): check -> build -> sign ->
-# notarize -> zip -> tag -> GitHub release. Nothing runs in GitHub Actions.
+# notarize -> zip -> tag -> GitHub release. Builds never run in GitHub Actions.
 #   RELEASE_APPROVED=yes NOTARY_PROFILE=<notarytool keychain profile> scripts/release.sh 1.0.0
-# Credentials stay in the keychain. The Homebrew cask is still updated by hand.
+# Credentials stay in the keychain. Publishing the release triggers .github/workflows/homebrew.yml,
+# which updates the cask in thrashr888/homebrew-tap (needs the HOMEBREW_TAP_TOKEN secret).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="${1:?usage: scripts/release.sh <version>}"
