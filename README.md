@@ -16,6 +16,10 @@ that live elsewhere and talk to you by email or iMessage.
   mail that asks for you, unanswered iMessages, failed connections and finished tasks.
 - **Goals.** Your Linear team's open issues with filters, agent tags, editing, New Ticket and
   "send to an agent".
+- **Tool cards.** When an agent's tool comes with an [MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
+  card, the thread shows it inline. [cider](https://github.com/thrashr888/cider) gives Pi agents
+  cards for weather, calendar, reminders, stocks, Home, Music, photos, contacts and the Mac's own
+  status (list it in the agent's `.pi/mcp.json`; see `bridge/tavern-durable`).
 - **Services.** Docker containers on each agent's machine.
 - **Lore.** Links to the party's shared docs and boards.
 
@@ -25,7 +29,18 @@ that live elsewhere and talk to you by email or iMessage.
 
 ![Party mail, threaded and attributed to members](docs/screenshots/mail.png)
 
-Screenshots show a made-up party. `scripts/demo.sh` runs it (fake agents, sample mail, its own
+### Cards from cider
+
+Pi agents get Mac tools from [cider](https://github.com/thrashr888/cider), and its results come
+back as cards: no network access, links open in your browser, and a button that changes
+something (a light, a scene, a song) asks first.
+
+| Weather and the day's agenda | Home, with lights and scenes to tap |
+| --- | --- |
+| ![Ivy answers "what does my day look like?" with cider's weather and agenda cards](docs/screenshots/cards.png) | ![Ivy shows which lights are on with cider's Home card](docs/screenshots/home.png) |
+
+Screenshots show a made-up party, cards included (the card pages come from cider; the data is
+invented). `scripts/demo.sh` runs it (fake agents, sample mail, its own
 data folder via `TAVERN_HOME`), and `scripts/screenshots.sh` retakes these images.
 
 ## Install (Apple silicon, macOS 14+)

@@ -85,7 +85,7 @@ final class AppModel: ObservableObject {
         }
         alerts.model = self
         // TAVERN_MAIL_THREAD selects a thread when Mail opens, like TAVERN_PAGE, for screenshots.
-        focusedMailThread = ProcessInfo.processInfo.environment["TAVERN_MAIL_THREAD"]
+        focusedMailThread = ProcessInfo.processInfo.environment["TAVERN_MAIL_THREAD"].flatMap { $0.isEmpty ? nil : $0 }
     }
 
     func tasks(for agent: RosterMember) -> [AgentTask] {
