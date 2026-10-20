@@ -126,7 +126,9 @@ export function riskOf(call, { policy = "risky", cwd = process.cwd(), mcpChanges
 export function describe(call, reason) {
   const args = call?.arguments ?? {};
   const detail =
-    call?.name === "bash" ? String(args.command ?? "") : call?.name ? `${call.name} ${String(args.path ?? "")}`.trim() : "";
+    call?.name === "bash" ? String(args.command ?? "")
+    : "path" in args ? `${call.name} ${String(args.path ?? "")}`.trim()
+    : `${call?.name ?? "tool"} ${JSON.stringify(args)}`;
   return { title: `Allow ${call?.name ?? "tool"}? It ${reason}.`, message: detail.slice(0, 4000) };
 }
 

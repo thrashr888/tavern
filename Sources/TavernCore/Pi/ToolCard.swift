@@ -52,3 +52,30 @@ public struct ToolCardPage: Equatable, Sendable {
         self.init(html: html, imageDomains: domains, prefersBorder: meta?["prefersBorder"]?.boolValue ?? true)
     }
 }
+
+/// Card pages kept on disk, so a card in an old message still shows after its server stops
+/// offering it (or while the agent is offline). Keyed by server and `ui://` URI.
+public enum ToolCardCache {
+    static var folder: URL? { TavernPaths.file("cards") }
+
+    static func file(_ card: ToolCard) -> URL? {
+        let key = "\(card.server)|\(card.resourceUri)".utf8.reduce(into: UInt64(14_695_981_039_346_656_037)) { hash, byte in
+            hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        return folder?.appendingPathComponent(String(key, radix: 16) + ".json")
+    }
+
+    public static func load(_ card: ToolCard) -> ToolCardPage? {
+        guard let url = file(card), let data = try? Data(contentsOf: url), let json = try? JSONValue.decode(data) else { return nil }
+        return ToolCardPage(json: json)
+    }
+
+    public static func save(_ page: ToolCardPage, for card: ToolCard) {
+        guard let url = file(card), let folder else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let json: JSONValue = ["html": .string(page.html),
+                               "meta": ["prefersBorder": .bool(page.prefersBorder),
+                                        "csp": ["resourceDomains": .array(page.imageDomains.map(JSONValue.string))]]]
+        try? json.encoded().write(to: url, options: .atomic)
+    }
+}

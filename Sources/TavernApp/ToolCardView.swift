@@ -34,12 +34,18 @@ struct ToolCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         // The thread can show from the store before the agent connects; load (again) once it does.
         .task(id: "\(card.resourceUri) \(session.presence.label)") {
-            guard page == nil, session.presence == .idle || session.presence == .working else { return }
+            if page == nil, session.presence != .idle, session.presence != .working, let cached = ToolCardCache.load(card) {
+                page = cached
+            }
+            guard page == nil || failure != nil, session.presence == .idle || session.presence == .working else { return }
             do {
-                page = try await session.cardPage(card)
+                let fresh = try await session.cardPage(card)
+                ToolCardCache.save(fresh, for: card)
+                page = fresh
                 failure = nil
             } catch {
-                failure = String(describing: error)
+                // An older card its server no longer offers still shows from the last copy.
+                if let cached = ToolCardCache.load(card) { page = cached } else { failure = String(describing: error) }
             }
         }
     }
