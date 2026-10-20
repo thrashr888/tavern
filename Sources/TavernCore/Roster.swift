@@ -182,6 +182,13 @@ public struct Roster: Codable, Equatable, Sendable {
 
     public func member(id: String) -> RosterMember? { members.first { $0.id == id } }
 
+    /// Reads `roster.json`: nil when there's no file, and a thrown error when there is one Tavern
+    /// can't read, so nothing saves over it.
+    public static func loadFile(from url: URL?) throws -> Roster? {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(Roster.self, from: Data(contentsOf: url))
+    }
+
     /// Reads `roster.json` if present, otherwise the example party.
     public static func load(from url: URL?) -> Roster {
         guard let url, let data = try? Data(contentsOf: url),

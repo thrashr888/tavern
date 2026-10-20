@@ -85,3 +85,32 @@ extension RosterMember {
         piEndpoint ?? piLaunch.map(PiEndpoint.command)
     }
 }
+
+extension PiEndpoint {
+    /// socat for a remote shell that may not have Homebrew on its PATH (a Mac reached over SSH).
+    public static let defaultSocat = "PATH=$PATH:/opt/homebrew/bin:/usr/local/bin socat"
+
+    /// A durable host on another machine, through the user's SSH and socat to its loopback port.
+    public static func ssh(host: String, port: UInt16, socat: String = defaultSocat) -> PiEndpoint {
+        .command(["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", host,
+                  "\(socat) - TCP:127.0.0.1:\(port)"])
+    }
+
+    /// The port of a durable host on this Mac (`tcp 127.0.0.1:<port>`), else nil.
+    public var localPort: UInt16? {
+        if case .tcp(let host, let port) = self, ["127.0.0.1", "localhost", "::1"].contains(host) { return port }
+        return nil
+    }
+
+    /// Host, port and socat of an endpoint made by `ssh(host:port:socat:)` (pi-bundle writes the
+    /// same shape), so Settings can edit it; nil for anything else, such as a command with its own
+    /// `-p` or `-i`, which Settings leaves as Custom rather than rebuild without them.
+    public var sshTarget: (host: String, port: UInt16, socat: String)? {
+        guard case .command(let argv) = self, argv.count == 8, let last = argv.last,
+              let range = last.range(of: " - TCP:127.0.0.1:"), let port = UInt16(last[range.upperBound...]) else { return nil }
+        let host = argv[6]
+        guard Array(argv[..<6]) == ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"],
+              !host.isEmpty, !host.hasPrefix("-"), !host.contains("="), !host.contains(" ") else { return nil }
+        return (host, port, String(last[..<range.lowerBound]))
+    }
+}

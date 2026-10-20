@@ -34,6 +34,12 @@ struct TavernApp: App {
             AppCommands(model: model)
             SidebarCommands()
         }
+
+        // Tavern > Settings… (⌘,): the party, its members and lore, saved to roster.json.
+        Settings {
+            SettingsView()
+                .environmentObject(model)
+        }
     }
 }
 
@@ -81,10 +87,33 @@ final class AppModel: ObservableObject {
     @Published var linearProjects: [LinearProject] = []
     /// iMessage conversations whose last word, in the last day, is the member's.
     @Published private(set) var unansweredIMessages: [UnansweredMessage] = []
+    /// Where the roster is saved; nil when there's no Application Support folder.
+    let rosterURL = Roster.defaultURL()
+    /// False on a first launch, before there's a roster.json: the example party is showing.
+    @Published private(set) var hasRosterFile: Bool
+    /// Pi agents found on this Mac or the tailnet that aren't in the party (nor dismissed).
+    @Published private(set) var discovered: [DiscoveredAgent] = []
+    @Published private(set) var discovering = false
+    /// Why the last roster save failed, for Settings to show.
+    @Published private(set) var rosterSaveError: String?
+    /// Set when roster.json exists but can't be read: Tavern shows the example party and Settings
+    /// changes nothing, so the file is never saved over.
+    let rosterLoadError: String?
+    /// Found agents being added (their avatar may be coming over SSH), so Add can't run twice.
+    @Published private(set) var adding: Set<String> = []
+    private var mailRosterTask: Task<Void, Never>?
 
     init() {
-        let loaded = Roster.load(from: Roster.defaultURL())
+        var loaded = Roster.fallback
+        var loadError: String?
+        do {
+            loaded = try Roster.loadFile(from: Roster.defaultURL()) ?? .fallback
+        } catch {
+            loadError = "roster.json can't be read (\(error.localizedDescription)). Fix it by hand; Settings won't save over it."
+        }
         roster = loaded
+        rosterLoadError = loadError
+        hasRosterFile = Roster.defaultURL().map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         linear = loaded.linearTeam.flatMap { LinearSource.live(teamKey: $0) }
         assignments = assignmentStore?.load() ?? []
         do {
@@ -320,7 +349,7 @@ final class AppModel: ObservableObject {
     /// Sets up the mail feed and polls if Gmail is already connected on this Mac.
     func startMail() async {
         guard mail == nil, let store else { return }
-        let feed = await MailFeed.live(store: store, roster: roster)
+        let feed = await MailFeed.live(store: store) { [unowned self] in self.roster }
         mail = feed
         mailWatch = feed.$threads.sink { [weak self] threads in
             self?.lastSeen = threads.lastSeen()
@@ -359,6 +388,111 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    /// The one way the roster changes (Settings, the Dashboard's Add): applies `change` to the
+    /// current roster and saves it to roster.json right away, so no edit works from a stale copy.
+    /// A new mail label or Linear team takes effect at the next launch; everything else now.
+    @discardableResult
+    func updateRoster(_ change: (inout Roster) -> Void) -> Bool {
+        guard rosterLoadError == nil, let rosterURL else { return false }
+        var updated = roster
+        change(&updated)
+        guard updated != roster || !hasRosterFile else { return true }
+        do {
+            try RosterFile.save(updated, to: rosterURL)
+            rosterSaveError = nil
+        } catch {
+            rosterSaveError = "Couldn't save roster.json: \(error.localizedDescription)"
+            return false
+        }
+        for (id, session) in sessions where updated.member(id: id)?.endpoint != roster.member(id: id)?.endpoint {
+            // A changed or removed connection gets a fresh session on next use.
+            sessions[id] = nil
+            Task { await session.disconnect() }
+        }
+        roster = updated
+        hasRosterFile = true
+        discovered.removeAll { updated.member(id: $0.id) != nil }
+        // Mail attribution follows the new names and addresses, once typing settles.
+        mailRosterTask?.cancel()
+        mailRosterTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            self.mail?.rosterChanged(self.roster)
+        }
+        return true
+    }
+
+    /// Looks for pi-bundle agents on this Mac, then on online tailnet Macs and Linux boxes over SSH.
+    /// Without Tailscale (the work Mac) it's this Mac only. A separate party (the demo) looks only
+    /// in its own `discovery` folder, so screenshots never show the real machines.
+    func discoverAgents() async {
+        guard !discovering else { return }
+        discovering = true
+        defer { discovering = false }
+        var found: [DiscoveredAgent]
+        if let home = TavernPaths.separateHome {
+            found = await AgentDiscovery.local(home: home.appendingPathComponent("discovery"))
+        } else {
+            found = await AgentDiscovery.local()
+            if tailscale == nil, tailscaleError == nil { tailscale = try? await TailscaleReader.read() }
+            let hosts = AgentDiscovery.sshCandidates(in: tailscale)
+            // A few at a time, so a big tailnet doesn't start dozens of ssh processes at once.
+            for batch in stride(from: 0, to: hosts.count, by: 4).map({ Array(hosts[$0..<min($0 + 4, hosts.count)]) }) {
+                await withTaskGroup(of: [DiscoveredAgent].self) { group in
+                    for host in batch { group.addTask { await AgentDiscovery.remote(host: host) } }
+                    for await agents in group { found += agents }
+                }
+            }
+        }
+        let dismissed = Set(UserDefaults.standard.stringArray(forKey: Self.dismissedKey) ?? [])
+        var seen = Set<String>()
+        // On a first launch the example members' ids (scout, sage) mustn't hide real agents.
+        discovered = found.filter { agent in
+            (!hasRosterFile || roster.member(id: agent.id) == nil) && !dismissed.contains(agent.id) && seen.insert(agent.id).inserted
+        }
+    }
+
+    /// Adds a found agent to the party (the Dashboard's and Settings' "Add") and connects to it.
+    /// The avatar comes first, into a temporary file; the id is picked against the roster as it is
+    /// once that's done, so overlapping adds and Settings edits all survive.
+    func add(_ agent: DiscoveredAgent) async {
+        guard rosterLoadError == nil, adding.insert(agent.id).inserted else { return }
+        defer { adding.remove(agent.id) }
+        var avatar: URL?
+        if agent.avatarPath != nil {
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent("tavern-avatar-\(UUID().uuidString).png")
+            if await AgentDiscovery.fetchAvatar(of: agent, to: temp) { avatar = temp }
+        }
+        defer { if let avatar { try? FileManager.default.removeItem(at: avatar) } }
+        var member = agent.member()
+        let added = updateRoster { roster in
+            // On a first launch the example party goes away once a real member arrives.
+            if !hasRosterFile && roster == .fallback { roster.members = [] }
+            if roster.member(id: member.id) != nil { member.id = roster.newMemberID(for: member.name) }
+            roster.members.append(member)
+        }
+        guard added else { return }
+        if let avatar { try? PartyArt.set("avatars/\(member.id)", from: avatar) }
+        if let session = session(for: member.id) {
+            Task { await session.connect() }
+        }
+    }
+
+    /// Hides a found agent from the banner; it stays listed in Settings.
+    func dismiss(_ agent: DiscoveredAgent) {
+        var dismissed = UserDefaults.standard.stringArray(forKey: Self.dismissedKey) ?? []
+        dismissed.append(agent.id)
+        UserDefaults.standard.set(dismissed, forKey: Self.dismissedKey)
+        discovered.removeAll { $0.id == agent.id }
+    }
+
+    /// Brings dismissed agents back (Settings' "Look again").
+    func clearDismissed() {
+        UserDefaults.standard.removeObject(forKey: Self.dismissedKey)
+    }
+
+    private static let dismissedKey = "tavern.discovery.dismissed"
 
     /// Remote streams don't survive sleep; reconnect every live session when the Mac wakes.
     func watchWake() async {

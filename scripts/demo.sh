@@ -18,6 +18,10 @@ host() { # name port transcript [approval]
     DEMO_TRANSCRIPT="$transcript" DEMO_APPROVAL="${4:-}" node bridge/tavern-durable/host.mjs 2>/dev/null &
 }
 mkdir -p "$home/scout" "$home/forge" "$home/ivy/.pi"
+# A pi-bundle agent card for discovery to find ("Found Moss on Garden Pi. Add?"); no host runs for it.
+mkdir -p "$home/discovery/.config/pi-bundle/agents"
+printf '{"id": "moss", "name": "Moss", "host": "Garden Pi", "partyClass": "Druid", "animal": "Tortoise", "avatarColor": "#5b7a3d", "port": 19614, "model": "ollama/qwen3.5:9b"}\n' \
+  > "$home/discovery/.config/pi-bundle/agents/moss.json"
 # Ivy's cider calls come back as MCP Apps cards. The data is made up (docs/demo/cards.py); the card
 # pages come from the cider installed here, which the host starts but never asks for data.
 python3 docs/demo/cards.py "$home"
