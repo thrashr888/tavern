@@ -52,6 +52,13 @@ final class LinkPreviewTests: XCTestCase {
                        "🍺 &bogus; <b>")
     }
 
+    func testMetaParserStaysFastOnUnclosedTags() {
+        let hostile = String(repeating: "<meta <link <title ", count: 3_400)
+        let start = Date()
+        XCTAssertEqual(LinkMeta.parse(hostile), LinkMeta())
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+    }
+
     func testMetaParserCapsLongDescriptions() {
         let long = String(repeating: "word ", count: 200)
         let description = LinkMeta.parse("<head><meta name=\"description\" content=\"\(long)\"></head>").description

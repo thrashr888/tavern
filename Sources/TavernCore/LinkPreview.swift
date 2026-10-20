@@ -177,21 +177,21 @@ public struct LinkMeta: Equatable, Sendable {
             head = html.prefix(65_536)
         }
         var tags: [String: String] = [:]
-        for match in head.matches(of: metaTag) {
-            let attributes = Self.attributes(String(match.output.1))
+        for tag in Self.tags("meta", in: head) {
+            let attributes = Self.attributes(tag)
             guard let key = (attributes["property"] ?? attributes["name"])?.lowercased(),
                   let content = attributes["content"], tags[key] == nil else { continue }
             tags[key] = content
         }
         // Icons: the largest kind first (apple-touch-icon is 180px), then the plain favicon.
         var icons: [String: String] = [:]
-        for match in head.matches(of: linkTag) {
-            let attributes = Self.attributes(String(match.output.1))
+        for tag in Self.tags("link", in: head) {
+            let attributes = Self.attributes(tag)
             guard let rel = attributes["rel"]?.lowercased(), let href = attributes["href"], !href.isEmpty,
                   !(attributes["type"]?.contains("svg") ?? false), !href.lowercased().hasSuffix(".svg") else { continue }
             for kind in rel.split(separator: " ").map(String.init) where icons[kind] == nil { icons[kind] = href }
         }
-        let title = head.firstMatch(of: titleTag).map { String($0.output.1) }
+        let title = Self.title(in: head)
         func link(_ value: String?) -> String? {
             guard let value = value.map(decodeEntities)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
             return value
@@ -211,9 +211,30 @@ public struct LinkMeta: Equatable, Sendable {
         )
     }
 
-    nonisolated(unsafe) private static let metaTag = #/(?i)<meta\s([^>]*)>/#
-    nonisolated(unsafe) private static let linkTag = #/(?i)<link\s([^>]*)>/#
-    nonisolated(unsafe) private static let titleTag = #/(?is)<title[^>]*>(.*?)<\/title>/#
+    /// The attribute text of each `<name …>` tag, scanning forward once: a page of unclosed
+    /// tags can't make it backtrack. At most 200 tags, each at most 2 KB.
+    static func tags(_ name: String, in html: Substring) -> [String] {
+        var result: [String] = []
+        var rest = html[...]
+        while result.count < 200, let open = rest.range(of: "<" + name, options: .caseInsensitive) {
+            rest = rest[open.upperBound...]
+            guard let next = rest.first, next.isWhitespace || next == "/" else { continue }
+            let window = rest.prefix(2048)
+            guard let close = window.firstIndex(of: ">") else { continue }
+            result.append(String(rest[..<close]))
+            rest = rest[rest.index(after: close)...]
+        }
+        return result
+    }
+
+    static func title(in html: Substring) -> String? {
+        guard let open = html.range(of: "<title", options: .caseInsensitive),
+              let start = html[open.upperBound...].prefix(256).firstIndex(of: ">") else { return nil }
+        let body = html[html.index(after: start)...].prefix(2048)
+        guard let end = body.range(of: "</title", options: .caseInsensitive) else { return nil }
+        return String(body[..<end.lowerBound])
+    }
+
     nonisolated(unsafe) private static let attribute = #/([A-Za-z_:\-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/#
 
     static func attributes(_ text: String) -> [String: String] {
