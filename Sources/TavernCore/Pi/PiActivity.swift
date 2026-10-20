@@ -130,11 +130,14 @@ public struct PiWork: Equatable, Identifiable, Sendable {
 public enum PiThreadRow: Equatable, Identifiable, Sendable {
     case message(TranscriptItem)
     case work(PiWork)
+    /// An MCP Apps card a tool result came with, shown after the work that made it.
+    case card(id: String, ToolCard)
 
     public var id: String {
         switch self {
         case .message(let item): return item.id
         case .work(let work): return "work:\(work.id)"
+        case .card(let id, _): return "card:\(id)"
         }
     }
 }
@@ -167,6 +170,11 @@ public enum PiActivity {
                 step.ended = item.date
                 step.failed = item.failed
                 steps.append(step)
+                if var card = item.card {
+                    if let id = item.toolCallID, let issued = calls[id] { card.arguments = issued.call.arguments }
+                    flush()
+                    rows.append(.card(id: item.id, card))
+                }
             case .assistant where item.text.isEmpty && !item.toolCalls.isEmpty:
                 // A turn that only called tools: its steps carry it.
                 continue

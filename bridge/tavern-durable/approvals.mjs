@@ -93,7 +93,7 @@ function walk(file, depth = 0) {
 }
 
 /** Why this call needs Paul, or null when it can run. */
-export function riskOf(call, { policy = "risky", cwd = process.cwd() } = {}) {
+export function riskOf(call, { policy = "risky", cwd = process.cwd(), mcpChanges } = {}) {
   if (policy === "off") return null;
   const args = call?.arguments ?? {};
   switch (call?.name) {
@@ -116,6 +116,8 @@ export function riskOf(call, { policy = "risky", cwd = process.cwd() } = {}) {
       return null;
     }
     default:
+      // MCP tools that aren't read-only (see mcp.mjs) change something on their server.
+      if (mcpChanges?.has(call?.name)) return `runs ${call.name.replace("__", "'s ")}, which can change things`;
       return null;
   }
 }

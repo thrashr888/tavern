@@ -25,6 +25,10 @@ public enum PiCommand: Equatable, Sendable {
     /// An outside happening (new mail) handed to a durable host's agent. `key` is the request id,
     /// stable for the same happening, so the host runs it once however often it's sent.
     case event(source: String, text: String, key: String)
+    /// A durable host's MCP Apps card page for a tool result.
+    case readCard(server: String, uri: String)
+    /// A card's button calling a tool on its own server (after the user agreed).
+    case callCardTool(server: String, name: String, arguments: JSONValue)
 
     public var type: String {
         switch self {
@@ -39,6 +43,8 @@ public enum PiCommand: Equatable, Sendable {
         case .getAvailableModels: return "get_available_models"
         case .setModel: return "set_model"
         case .event: return "event"
+        case .readCard: return "read_card"
+        case .callCardTool: return "call_card_tool"
         }
     }
 
@@ -72,6 +78,13 @@ public enum PiCommand: Equatable, Sendable {
             object["source"] = .string(source)
             object["text"] = .string(text)
             object["requestId"] = .string(key)
+        case .readCard(let server, let uri):
+            object["server"] = .string(server)
+            object["uri"] = .string(uri)
+        case .callCardTool(let server, let name, let arguments):
+            object["server"] = .string(server)
+            object["name"] = .string(name)
+            object["arguments"] = arguments
         case .abort, .compact, .getState, .getSessionStats, .getAvailableModels:
             break
         }

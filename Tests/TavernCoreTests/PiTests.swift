@@ -558,3 +558,28 @@ final class FakePi: PiTransport, @unchecked Sendable {
         }
     }
 }
+
+final class ToolCardTests: XCTestCase {
+    func testToolResultWithUIDetailsBecomesACardRow() throws {
+        let call: JSONValue = ["type": "message", "id": "a1", "timestamp": "2026-10-19T10:00:00Z",
+                               "message": ["role": "assistant", "content": .array([["type": "toolCall", "id": "c1", "name": "cider__weather_forecast", "arguments": ["days": .number(3)]]])]]
+        let result: JSONValue = ["type": "message", "id": "r1", "timestamp": "2026-10-19T10:00:02Z",
+                                 "message": ["role": "toolResult", "toolCallId": "c1", "toolName": "cider__weather_forecast", "isError": false,
+                                             "content": .array([]),
+                                             "details": ["ui": ["server": "cider", "resourceUri": "ui://cider/weather", "structuredContent": ["ok": true]]]]]
+        let items = PiEntries.events(from: [call, result], sessionID: "s", agentID: "ember").compactMap(TranscriptItem.init(event:))
+        let rows = PiActivity.rows(from: items)
+        guard case .card(_, let card) = rows.last else { return XCTFail("no card row: \(rows)") }
+        XCTAssertEqual(card.server, "cider")
+        XCTAssertEqual(card.resourceUri, "ui://cider/weather")
+        XCTAssertEqual(card.arguments["days"]?.doubleValue, 3)
+        XCTAssertEqual(card.structuredContent["ok"]?.boolValue, true)
+        if case .work = rows.first {} else { XCTFail("the step still shows") }
+    }
+
+    func testCardPagesKeepOnlyHTTPSImageHosts() {
+        let page = ToolCardPage(json: ["html": "<p>x</p>", "meta": ["csp": ["resourceDomains": .array(["https://weatherkit.apple.com", "http://evil.example", "https://a.example; script-src *", "*"])]]])
+        XCTAssertEqual(page?.imageDomains, ["https://weatherkit.apple.com"])
+        XCTAssertNil(ToolCard(details: ["ui": ["server": "x", "resourceUri": "https://x.example"]], toolName: "t"), "only ui:// resources")
+    }
+}

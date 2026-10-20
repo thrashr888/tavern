@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Approvals, approvalExtension } from "./approvals.mjs";
+import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
 import { RequestLog } from "./requests.mjs";
 
@@ -39,7 +40,11 @@ const runtime = await import(pathToFileURL(runtimePath).href);
 const clients = new Set();
 // The oldest open question goes to every client as a confirm dialog (Tavern shows one at a time).
 const approvals = new Approvals((dialog) => dialog && broadcast(confirmRequest(dialog)));
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD })];
+// MCP servers from <AGENT_CWD>/.pi/mcp.json become agent tools; their changes ask like risky shell.
+const mcpServers = await startServers({ cwd: AGENT_CWD, file: process.env.TAVERN_DURABLE_MCP, log });
+const mcp = mcpExtension(mcpServers);
+const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name));
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
   if (!/No durable session exists/.test(String(error?.message))) throw error;
@@ -146,6 +151,20 @@ async function handle(socket, line) {
         background(controller.submit(`[Event from ${source}]\n${text}`, "followUp"));
         return reply(true, { disposition: busy ? "queued" : "started" });
       }
+      case "read_card": {
+        // An MCP Apps card for a tool result Tavern shows (details.ui in the transcript).
+        const card = await readCard(mcpServers, String(command.server ?? ""), String(command.uri ?? ""));
+        return reply(true, card);
+      }
+      case "call_card_tool": {
+        // A card's own button calling a tool of its server. Tavern asks Paul before sending this.
+        const server = mcpServers.find((s) => s.name === command.server);
+        const tool = server?.tools.find((t) => t.name === command.name);
+        if (!tool) return reply(false, undefined, `no tool ${command.name} on ${command.server}`);
+        const result = await server.request("tools/call", { name: tool.name, arguments: command.arguments ?? {} });
+        log(`card called ${server.name}/${tool.name}`);
+        return reply(true, { ...result, text: resultText(result) });
+      }
       case "abort":
         await controller.abort();
         return reply(true);
@@ -234,6 +253,7 @@ function logShape(current) {
 
 async function shutdown() {
   unsubscribe();
+  for (const mcpServer of mcpServers) mcpServer.close();
   server.close();
   for (const socket of clients) socket.destroy();
   await durable.close();

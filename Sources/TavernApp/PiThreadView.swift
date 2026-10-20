@@ -114,6 +114,7 @@ struct PiThreadView: View {
                             TranscriptRow(item: item)
                                 .findHighlight(matched: matches.contains(row.id), current: row.id == currentMatch)
                         case .work(let work): WorkRow(work: work)
+                        case .card(_, let card): ToolCardView(card: card, session: session)
                         }
                     }
                     ForEach(session.pendingMessages) { item in

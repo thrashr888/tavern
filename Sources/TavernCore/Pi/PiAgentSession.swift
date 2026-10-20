@@ -217,6 +217,20 @@ public final class PiAgentSession: ObservableObject {
 
     // MARK: - Controls (plan section 4; no new or switch session)
 
+    /// A tool result's MCP Apps card page, read through the durable host.
+    public func cardPage(_ card: ToolCard) async throws -> ToolCardPage {
+        guard let client else { throw PiClientError.disconnected }
+        let response = try await client.send(.readCard(server: card.server, uri: card.resourceUri))
+        guard let page = ToolCardPage(json: response.data) else { throw PiClientError.rejected(command: "read_card", error: "no card page") }
+        return page
+    }
+
+    /// A card's button calling one of its server's tools. Ask the user before calling this.
+    public func callCardTool(_ card: ToolCard, name: String, arguments: JSONValue) async throws -> JSONValue {
+        guard let client else { throw PiClientError.disconnected }
+        return try await client.send(.callCardTool(server: card.server, name: name, arguments: arguments)).data ?? .null
+    }
+
     /// Sends a prompt when idle. While working, use `steer` or `followUp` instead.
     public func send(_ text: String, images: [PiImage] = []) async {
         await submit(text, .prompt(text, streamingBehavior: nil, images: images)) { response in
