@@ -123,7 +123,7 @@ public enum AgentDiscovery {
 
     /// Copies the avatar beside a found agent's card to `destination` (a local copy, or base64 over SSH).
     public static func fetchAvatar(of agent: DiscoveredAgent, to destination: URL) async -> Bool {
-        guard let path = agent.avatarPath else { return false }
+        guard let path = agent.avatarPath, isSafeName(destination.deletingPathExtension().lastPathComponent) else { return false }
         let data: Data?
         switch agent.place {
         case .local:
@@ -146,7 +146,8 @@ public enum AgentDiscovery {
             .filter { !$0.isSelf && $0.online && ["macos", "linux"].contains(($0.os ?? "").lowercased()) }
             .map { $0.magicDNSShortName ?? $0.hostName }
         var seen = Set<String>()
-        return names.filter { seen.insert($0.lowercased()).inserted }
+        // Peers name themselves; a name like "-oProxyCommand=…" must never reach ssh.
+        return names.filter { isSafeName($0) && seen.insert($0.lowercased()).inserted }
     }
 
     /// Parses `remoteScript` output.
@@ -174,7 +175,8 @@ public enum AgentDiscovery {
     static func cards(from files: [(String, Data)]) -> [(card: AgentCard, path: String)] {
         var result: [(card: AgentCard, path: String)] = []
         for (path, data) in files {
-            guard let card = try? JSONDecoder().decode(AgentCard.self, from: data), !card.id.isEmpty,
+            // The id names files (avatars/<id>.png), so a card from another machine can't carry a path.
+            guard let card = try? JSONDecoder().decode(AgentCard.self, from: data), isSafeName(card.id), !card.id.contains("."),
                   !result.contains(where: { $0.card.id == card.id }) else { continue }
             result.append((card, path))
         }
@@ -191,7 +193,12 @@ public enum AgentDiscovery {
     }
 
     private static func ssh(host: String, timeout: Int) -> [String] {
-        ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=\(timeout)", host]
+        ["/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=\(timeout)", "--", host]
+    }
+
+    /// Letters, digits, ".", "_" and "-", not starting with "-": safe as an ssh host or a file name.
+    static func isSafeName(_ name: String) -> Bool {
+        !name.isEmpty && !name.hasPrefix("-") && name != ".." && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
     }
 
     /// Runs a command and returns its stdout, or throws when it fails or runs past `timeout` seconds.

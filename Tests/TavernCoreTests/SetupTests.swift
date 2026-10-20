@@ -93,6 +93,7 @@ final class SetupTests: XCTestCase {
         """
         let parsed = AgentDiscovery.parse(output)
         XCTAssertEqual(parsed.count, 1)
+        XCTAssertTrue(AgentDiscovery.parse("--- /x\n{\"id\": \"../evil\", \"name\": \"E\"}\n").isEmpty)
         let agent = DiscoveredAgent(card: parsed[0].card, place: .ssh(host: "server-a"), cardPath: parsed[0].path)
         XCTAssertEqual(agent.machine, "server-a")
         let member = agent.member()
@@ -109,6 +110,7 @@ final class SetupTests: XCTestCase {
             TailscaleNode(hostName: "Pauls-Own-Mac", dnsName: "laptop-b.tail0.ts.net", os: "macOS", online: true),
             TailscaleNode(hostName: "phone", dnsName: "phone.tail0.ts.net", os: "iOS", online: true),
             TailscaleNode(hostName: "old", dnsName: "old.tail0.ts.net", os: "linux", online: false),
+            TailscaleNode(hostName: "-oProxyCommand=touch x", os: "linux", online: true),
         ])
         XCTAssertEqual(AgentDiscovery.sshCandidates(in: status), ["server-a", "laptop-b"])
         XCTAssertEqual(AgentDiscovery.sshCandidates(in: TailscaleStatus(backendState: "Stopped", nodes: status.nodes)), [])

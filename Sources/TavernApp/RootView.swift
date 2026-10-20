@@ -382,7 +382,8 @@ enum PartyArt {
     /// Sets `portrait` or `avatars/<id>` from an image file the user picked (saved as PNG), or
     /// removes it when `source` is nil.
     static func set(_ name: String, from source: URL?) throws {
-        guard let base = TavernPaths.base else { return }
+        // Only "portrait" or "avatars/<id>": never a path that leaves the Tavern folder.
+        guard let base = TavernPaths.base, !name.contains(".."), !name.hasPrefix("/") else { return }
         let fm = FileManager.default
         for ext in ["png", "jpg", "jpeg", "heic"] {
             try? fm.removeItem(at: base.appendingPathComponent("\(name).\(ext)"))

@@ -109,7 +109,7 @@ extension PiEndpoint {
               argv.count >= 3, let last = argv.last, let range = last.range(of: " - TCP:127.0.0.1:"),
               let port = UInt16(last[range.upperBound...]) else { return nil }
         let host = argv[argv.count - 2]
-        guard !host.hasPrefix("-"), !host.contains("=") else { return nil }
+        guard !host.hasPrefix("-"), !host.contains("="), !host.contains(" ") else { return nil }
         return (host, port, String(last[..<range.lowerBound]))
     }
 }
