@@ -54,7 +54,11 @@ struct MemberView: View {
                     .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
             }
             .toolbar {
-                Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
+                // Flush right, next to the panel it opens.
+                ToolbarItemGroup {
+                    Spacer()
+                    Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
+                }
             }
         } else {
             Text("No party member \(memberID)").foregroundStyle(.secondary)
