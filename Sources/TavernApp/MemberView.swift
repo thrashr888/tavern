@@ -191,6 +191,7 @@ private struct IMessageConversation: View {
     let member: RosterMember
     let handle: String
     let lastSeen: Date?
+    @EnvironmentObject private var model: AppModel
     @State private var messages: [IMessage] = []
     @State private var draft = ""
     @State private var error: String?
@@ -366,8 +367,11 @@ private struct IMessageConversation: View {
     private var canSend: Bool { !sending && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty) }
 
     private func load() async {
+        // The conversation as last read shows at once; the fresh read replaces it.
+        if messages.isEmpty, let cached = model.imessageHistory[handle] { messages = cached }
         do {
             messages = try await cider.history(with: handle)
+            model.imessageHistory[handle] = messages
             error = nil
             needsDiskAccess = false
         } catch {

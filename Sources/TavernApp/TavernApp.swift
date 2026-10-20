@@ -74,6 +74,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var openIssues: [LinearIssue] = []
     private let assignmentStore = AssignmentStore.defaultURL().map(AssignmentStore.init(url:))
     private let alerts = AgentAlerts()
+    // Page data kept between visits (PageCache.swift).
+    @Published var containerResults: [String: Result<[DockerContainer], DockerError>] = [:]
+    @Published var containersRefreshedAt: Date?
+    var containerRefresh: Task<Void, Never>?
+    @Published var dashboardStats: DashboardStats?
+    /// Each iMessage conversation as last read, by handle.
+    @Published var imessageHistory: [String: [IMessage]] = [:]
+    /// Linear issue details, workflow states and projects as last read.
+    @Published var issueDetails: [String: LinearIssueDetail] = [:]
+    @Published var linearStates: [LinearState] = []
+    @Published var linearProjects: [LinearProject] = []
     /// iMessage conversations whose last word, in the last day, is the member's.
     @Published private(set) var unansweredIMessages: [UnansweredMessage] = []
     /// Where the roster is saved; nil when there's no Application Support folder.
