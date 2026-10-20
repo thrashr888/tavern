@@ -228,9 +228,10 @@ private struct IMessageConversation: View {
                         }
                         let matches = findMatchIDs
                         let currentMatch = matches.indices.contains(findIndex) ? matches[findIndex] : nil
-                        ForEach(messages.suffix(200)) { message in
-                            bubble(message)
-                                .findHighlight(matched: matches.contains(message.id), current: message.id == currentMatch)
+                        // Tapbacks ("Liked “…”") show on the message they point to, not as bubbles.
+                        ForEach(IMessage.withReactions(Array(messages.suffix(200)))) { row in
+                            bubble(row.message, reactions: row.reactions)
+                                .findHighlight(matched: matches.contains(row.id), current: row.id == currentMatch)
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -285,7 +286,7 @@ private struct IMessageConversation: View {
         .padding(.vertical, 8)
     }
 
-    private func bubble(_ message: IMessage) -> some View {
+    private func bubble(_ message: IMessage, reactions: [Reaction] = []) -> some View {
         HStack {
             if message.fromMe { Spacer(minLength: 80) }
             VStack(alignment: message.fromMe ? .trailing : .leading, spacing: 4) {
@@ -301,6 +302,7 @@ private struct IMessageConversation: View {
                                     in: RoundedRectangle(cornerRadius: 16))
                         .foregroundStyle(message.fromMe ? Color.white : Color.primary)
                 }
+                if !reactions.isEmpty { ReactionChips(reactions: reactions) }
             }
             .help(message.date.formatted(date: .abbreviated, time: .shortened))
             if !message.fromMe { Spacer(minLength: 80) }

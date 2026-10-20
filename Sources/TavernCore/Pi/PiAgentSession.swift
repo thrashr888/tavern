@@ -27,6 +27,10 @@ public final class PiAgentSession: ObservableObject {
 
     public let agentID: String
     private let store: EventStore
+    /// The event log, for reactions (PiReactions.swift).
+    var reactionStore: EventStore? { store }
+    /// The user's reactions per transcript item id.
+    @Published public internal(set) var reactions: [String: [Reaction]] = [:]
     private let makeTransport: () throws -> PiTransport
     private var client: PiClient?
     private var listener: Task<Void, Never>?
@@ -233,15 +237,18 @@ public final class PiAgentSession: ObservableObject {
 
     /// Sends a prompt when idle. While working, use `steer` or `followUp` instead.
     public func send(_ text: String, images: [PiImage] = []) async {
+        let text = withReactionNotes(text)
         await submit(text, .prompt(text, streamingBehavior: nil, images: images)) { response in
             if response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
         }
     }
 
     public func steer(_ text: String, images: [PiImage] = []) async {
+        let text = withReactionNotes(text)
         await submit(text, .steer(text, images: images))
     }
     public func followUp(_ text: String, images: [PiImage] = []) async {
+        let text = withReactionNotes(text)
         await submit(text, .followUp(text, images: images))
     }
 
@@ -255,7 +262,8 @@ public final class PiAgentSession: ObservableObject {
         attached.forEach(AttachmentCache.store)
         // Pending, the message shows its images from the local copies, as the stored one will.
         let paths = attached.compactMap(AttachmentCache.localPath(for:))
-        let shown = paths.isEmpty ? text : text + "\n\nAttached images:\n" + paths.map { "- " + $0 }.joined(separator: "\n")
+        let visible = PiReactions.withoutNotes(text)
+        let shown = paths.isEmpty ? visible : visible + "\n\nAttached images:\n" + paths.map { "- " + $0 }.joined(separator: "\n")
         let item = TranscriptItem(id: "pending:\(UUID().uuidString)", role: .user, text: shown, date: Date())
         pendingMessages.append(item)
         pendingSince[item.id] = transcript.count
@@ -437,6 +445,7 @@ public final class PiAgentSession: ObservableObject {
     private func reloadTranscript() {
         let events = (try? store.events(threadKey: PiEntries.threadKey(agentID: agentID))) ?? []
         transcript = events.compactMap(TranscriptItem.init(event:))
+        loadReactions()
         // A pending message is done once a user row with its text lands after it was sent.
         for item in pendingMessages {
             let start = min(pendingSince[item.id] ?? 0, transcript.count)

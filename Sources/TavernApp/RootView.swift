@@ -108,9 +108,9 @@ struct SidebarView: View {
                     NavigationLink(value: Page.agent(id: agent.id)) {
                         row {
                             if let session = model.session(for: agent.id) {
-                                PiAgentRow(agent: agent, session: session)
+                                PiAgentRow(agent: agent, session: session, needs: model.attentionCounts[agent.id] ?? 0)
                             } else {
-                                AgentRow(agent: agent, status: "not connected")
+                                AgentRow(agent: agent, status: "not connected", needs: model.attentionCounts[agent.id] ?? 0)
                             }
                         } hint: { ShortcutHint(page: .agent(id: agent.id)) }
                         .memberQuickCard(agent)
@@ -119,7 +119,7 @@ struct SidebarView: View {
                 ForEach(model.roster.members.filter { $0.kind == .hosted }) { member in
                     NavigationLink(value: Page.member(id: member.id)) {
                         row {
-                            HostedMemberRow(member: member, lastSeen: model.lastSeen[member.id])
+                            HostedMemberRow(member: member, lastSeen: model.lastSeen[member.id], needs: model.attentionCounts[member.id] ?? 0)
                         } hint: { ShortcutHint(page: .member(id: member.id)) }
                         .memberQuickCard(member)
                     }
@@ -185,10 +185,12 @@ struct SidebarView: View {
 private struct HostedMemberRow: View {
     let member: RosterMember
     let lastSeen: Date?
+    var needs = 0
 
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(member: member, size: 32, hoverCard: false)
+                .overlay(alignment: .topTrailing) { NeedsDot(count: needs).offset(x: 4, y: -3) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.name).fontWeight(.medium)
                 Text([member.partyClass, lastSeen.map { "seen \($0.formatted(.relative(presentation: .named)))" } ?? "mail only"]
@@ -204,19 +206,22 @@ private struct HostedMemberRow: View {
 private struct PiAgentRow: View {
     let agent: RosterMember
     @ObservedObject var session: PiAgentSession
+    var needs = 0
 
     var body: some View {
-        AgentRow(agent: agent, status: session.dialog != nil ? "waiting on you" : session.presence.label)
+        AgentRow(agent: agent, status: session.dialog != nil ? "waiting on you" : session.presence.label, needs: needs)
     }
 }
 
 private struct AgentRow: View {
     let agent: RosterMember
     let status: String
+    var needs = 0
 
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(member: agent, size: 40, hoverCard: false)
+                .overlay(alignment: .topTrailing) { NeedsDot(count: needs).offset(x: 3, y: -2) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.name).fontWeight(.semibold)
                 if let partyClass = agent.partyClass {
@@ -432,6 +437,30 @@ extension LoreLink {
         case .linear: return "checklist"
         case .folder: return "folder"
         case .link: return "link"
+        }
+    }
+}
+
+/// The orange "needs you" mark on a party member's avatar: a dot, with a number from two up.
+struct NeedsDot: View {
+    let count: Int
+
+    var body: some View {
+        if count > 0 {
+            Group {
+                if count > 1 {
+                    Text("\(min(count, 99))")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 16, minHeight: 16)
+                } else {
+                    Color.clear.frame(width: 11, height: 11)
+                }
+            }
+            .background(Color.orange, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+            .accessibilityLabel(count == 1 ? "Needs you" : "\(count) things need you")
         }
     }
 }

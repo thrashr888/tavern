@@ -16,6 +16,8 @@ struct AttentionItem: Equatable {
     /// Connection failures and errors can be momentary (sleep, a reconnect); notify only when
     /// they're still there on the next check.
     var settles = false
+    /// The party member it's about, for the dot on their sidebar row.
+    var member: String? = nil
 }
 
 /// Tells the user when something needs them: a notification for each new "Needs you" item

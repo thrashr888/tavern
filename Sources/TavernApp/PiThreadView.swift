@@ -111,7 +111,9 @@ struct PiThreadView: View {
                     ForEach(session.rows) { row in
                         switch row {
                         case .message(let item):
-                            TranscriptRow(item: item)
+                            TranscriptRow(item: item, reactions: session.reactions[item.id] ?? []) { emoji in
+                                session.toggleReaction(emoji, on: item)
+                            }
                                 .findHighlight(matched: matches.contains(row.id), current: row.id == currentMatch)
                         case .work(let work): WorkRow(work: work)
                         case .card(_, let card): ToolCardView(card: card, session: session)
@@ -260,6 +262,11 @@ struct TranscriptRow: View {
     let item: TranscriptItem
     /// Live thinking starts open so a long think visibly moves; stored thinking starts collapsed.
     var thinkingExpanded = false
+    /// The user's reactions to this reply; `onReact` is nil where reacting doesn't apply.
+    var reactions: [Reaction] = []
+    var onReact: ((String) -> Void)? = nil
+    @State private var hovering = false
+    @State private var picking = false
 
     var body: some View {
         switch item.role {
@@ -288,8 +295,22 @@ struct TranscriptRow: View {
                 if !item.text.isEmpty {
                     MarkdownText(text: item.text)
                 }
+                if let onReact, !reactions.isEmpty {
+                    ReactionChips(reactions: reactions, onTap: onReact)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            // React from the reply's corner while hovering, without moving the text.
+            .overlay(alignment: .topTrailing) {
+                if let onReact, !item.text.isEmpty, hovering || picking {
+                    AddReactionButton(onPick: onReact, open: $picking)
+                        .padding(6)
+                        .background(.regularMaterial, in: Capsule())
+                        .offset(y: -10)
+                }
+            }
         }
     }
 }
