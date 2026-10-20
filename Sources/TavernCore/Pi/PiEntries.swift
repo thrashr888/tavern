@@ -105,7 +105,7 @@ public struct TranscriptItem: Equatable, Identifiable, Sendable {
             switch message?["role"]?.stringValue ?? "" {
             case "user":
                 role = .user
-                text = Self.text(of: message?["content"])
+                text = PiReactions.withoutNotes(Self.text(of: message?["content"]))
             case "assistant":
                 text = Self.text(of: message?["content"])
                 thinking = Self.thinking(of: message?["content"])

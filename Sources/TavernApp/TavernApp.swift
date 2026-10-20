@@ -236,15 +236,23 @@ final class AppModel: ObservableObject {
 
     /// Hands the current "Needs you" items to the notifier.
     func checkAttention() {
-        alerts.update(attention)
+        let items = attention
+        alerts.update(items)
+        let counts = items.reduce(into: [String: Int]()) { counts, item in
+            if let member = item.member { counts[member, default: 0] += 1 }
+        }
+        if counts != attentionCounts { attentionCounts = counts }
     }
+
+    /// How many "Needs you" items each party member has, for the dots in the sidebar.
+    @Published private(set) var attentionCounts: [String: Int] = [:]
 
     private func refreshUnansweredIMessages() async {
         var found: [UnansweredMessage] = []
         for member in roster.members {
             guard let handle = member.imessage,
                   // A tapback ("Reacted ✅ to …") isn't a message that wants an answer.
-                  let last = try? await CiderMessages().history(with: handle, days: 1).last(where: { !$0.text.hasPrefix("Reacted ") }),
+                  let last = try? await CiderMessages().history(with: handle, days: 1).last(where: { $0.tapback == nil }),
                   !last.fromMe else { continue }
             found.append(UnansweredMessage(member: member, message: last))
         }
@@ -266,34 +274,34 @@ final class AppModel: ObservableObject {
             if let dialog = session.dialog {
                 items.append(AttentionItem(id: "dialog-\(agent.id)-\(dialog.id)", title: "\(agent.name) is waiting on you",
                                            body: [dialog.title, dialog.message].compactMap { $0 }.joined(separator: "\n"),
-                                           page: .agent(id: agent.id)))
+                                           page: .agent(id: agent.id), member: agent.id))
             }
             if case .failed(let reason) = session.presence {
                 items.append(AttentionItem(id: "failed-\(agent.id)", title: "\(agent.name) can't connect", body: reason,
-                                           page: .agent(id: agent.id), settles: true))
+                                           page: .agent(id: agent.id), settles: true, member: agent.id))
             } else if let error = session.lastError {
                 items.append(AttentionItem(id: "error-\(agent.id)-\(error.prefix(80))", title: "\(agent.name) hit an error",
-                                           body: String(error.prefix(200)), page: .agent(id: agent.id), settles: true))
+                                           body: String(error.prefix(200)), page: .agent(id: agent.id), settles: true, member: agent.id))
             }
         }
         if !openIssues.isEmpty {
             for member in roster.members {
                 for task in tasks(for: member).filter(\.isNewlyFinished) {
                     items.append(AttentionItem(id: "finished-\(task.identifier)", title: "\(member.name) finished \(task.identifier)",
-                                               body: task.title, page: .goals, goal: task.identifier))
+                                               body: task.title, page: .goals, goal: task.identifier, member: member.id))
                 }
             }
         }
         for item in unansweredIMessages {
             items.append(AttentionItem(id: "imessage-\(item.member.id)-\(item.message.date.timeIntervalSince1970)",
                                        title: "\(item.member.name) is waiting on your reply", body: String(item.message.text.prefix(200)),
-                                       page: .member(id: item.member.id)))
+                                       page: .member(id: item.member.id), member: item.member.id))
         }
         for thread in mailAsks {
             let author = thread.messages.last?.author.flatMap { roster.member(id: $0) }
             items.append(AttentionItem(id: "ask-\(thread.threadID)-\(thread.lastDate.timeIntervalSince1970)",
                                        title: "\(author?.name ?? "Mail"): \(thread.ask(of: roster.owner) ?? thread.subject)",
-                                       body: thread.subject, page: .mail(project: nil), mailThread: thread.threadID))
+                                       body: thread.subject, page: .mail(project: nil), mailThread: thread.threadID, member: author?.id))
         }
         return items
     }

@@ -133,7 +133,7 @@ private struct IMessageQuickReply: View {
     }
 
     private func load() async {
-        latest = try? await CiderMessages().history(with: handle, days: 7).last(where: { !$0.text.hasPrefix("Reacted ") })
+        latest = try? await CiderMessages().history(with: handle, days: 7).last(where: { $0.tapback == nil })
     }
 }
 

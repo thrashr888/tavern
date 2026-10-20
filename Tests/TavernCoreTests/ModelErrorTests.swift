@@ -257,3 +257,46 @@ final class LinkedTextTests: XCTestCase {
         XCTAssertEqual(String(LinkedText.attributed(text).characters), text, "the text itself is unchanged")
     }
 }
+
+final class ReactionTests: XCTestCase {
+    private func message(_ id: String, _ text: String, fromMe: Bool = false) -> IMessage {
+        IMessage(id: id, text: text, fromMe: fromMe, date: Date())
+    }
+
+    func testTapbacksParse() {
+        XCTAssertEqual(Tapback(text: "Liked “Reading our retro today.”"), Tapback(emoji: "👍", quoted: "Reading our retro today.", removed: false))
+        XCTAssertEqual(Tapback(text: "Laughed at “ha”")?.emoji, "😂")
+        XCTAssertEqual(Tapback(text: "Reacted 🎉 to “Shipped it”"), Tapback(emoji: "🎉", quoted: "Shipped it", removed: false))
+        XCTAssertEqual(Tapback(text: "Removed a heart from “ok”")?.removed, true)
+        XCTAssertNil(Tapback(text: "Liked the plan, thanks"))
+        XCTAssertNil(Tapback(text: "Reacted strongly to the news"))
+    }
+
+    func testTapbacksFoldIntoTheirMessage() {
+        let rows = IMessage.withReactions([
+            message("1", "Reading our retro today. Quill can be the default project owner for Tavern work"),
+            message("2", "Sounds good", fromMe: true),
+            message("3", "Liked “Reading our retro today. Quill can be the default…”", fromMe: true),
+            message("4", "Loved “Sounds good”"),
+            message("5", "Liked “something from last month”"),
+        ])
+        XCTAssertEqual(rows.map(\.id), ["1", "2", "5"], "tapbacks fold away; one with no message in view stays")
+        XCTAssertEqual(rows[0].reactions, [Reaction(emoji: "👍", fromMe: true)])
+        XCTAssertEqual(rows[1].reactions, [Reaction(emoji: "❤️", fromMe: false)])
+        let removed = IMessage.withReactions([message("1", "ok"), message("2", "Loved “ok”"), message("3", "Removed a heart from “ok”")])
+        XCTAssertEqual(removed.map(\.reactions), [[]])
+    }
+}
+
+final class PiReactionNoteTests: XCTestCase {
+    func testNotesGoToTheAgentButNotTheThread() {
+        let pending = [PiReactions.Stored(target: "e2", emoji: "👍", on: true, delivered: false, preview: "Fixed the pricing page.\nBuild passes.",
+                                          sourceID: "r1", date: Date()),
+                       PiReactions.Stored(target: "e3", emoji: "🎉", on: true, delivered: true, preview: "Old", sourceID: "r2", date: Date()),
+                       PiReactions.Stored(target: "e4", emoji: "👀", on: false, delivered: false, preview: "Off", sourceID: "r3", date: Date())]
+        let note = PiReactions.note(for: pending)
+        XCTAssertEqual(note, "[Reaction] 👍 on your reply: “Fixed the pricing page. Build passes.”", "only new, on reactions")
+        XCTAssertEqual(PiReactions.withoutNotes("Ship it\n\n" + note!), "Ship it")
+        XCTAssertEqual(PiReactions.withoutNotes("No notes here"), "No notes here")
+    }
+}
