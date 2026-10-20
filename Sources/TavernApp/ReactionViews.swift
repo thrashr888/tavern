@@ -31,9 +31,40 @@ struct ReactionChips: View {
     }
 }
 
-/// The quick reactions offered on a Pi reply: Tavern's own, not iMessage's six.
+/// The quick reactions Tavern offers, GitHub's set.
 enum QuickReactions {
-    static let emoji = ["👍", "❤️", "😂", "🎉", "👀", "🤔", "👎"]
+    static let emoji = ["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"]
+}
+
+/// A composer button that puts one of the quick reactions into the draft. For iMessage this is
+/// how you react: Messages can't take a tapback from another app, so the emoji goes as a message.
+struct EmojiDraftButton: View {
+    @Binding var draft: String
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: {
+            Image(systemName: "face.smiling").font(.system(size: 13, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(.quaternary.opacity(0.6), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Add a reaction")
+        .popover(isPresented: $open, arrowEdge: .top) {
+            HStack(spacing: 6) {
+                ForEach(QuickReactions.emoji, id: \.self) { emoji in
+                    Button(emoji) {
+                        draft += (draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "" : " ") + emoji
+                        open = false
+                    }
+                    .buttonStyle(.plain)
+                    .font(.title3)
+                }
+            }
+            .padding(10)
+        }
+    }
 }
 
 /// A small "add reaction" button that opens the quick reactions.

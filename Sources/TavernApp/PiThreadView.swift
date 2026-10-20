@@ -180,6 +180,7 @@ struct PiThreadView: View {
                     .padding(.horizontal, 4)
                 HStack(spacing: 6) {
                     AddImageButton(images: $images)
+                    EmojiDraftButton(draft: $draft)
                     if let model = session.config.model {
                         Chip(systemImage: "cpu", text: model.shortName).help(model.label)
                     }

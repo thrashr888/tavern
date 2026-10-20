@@ -328,6 +328,7 @@ private struct IMessageConversation: View {
             }
             HStack(alignment: .bottom, spacing: 10) {
                 AddImageButton(images: $images).padding(.bottom, 8)
+                EmojiDraftButton(draft: $draft).padding(.bottom, 8)
                 VStack(alignment: .leading, spacing: 8) {
                     AttachmentTray(images: $images)
                     TextField("iMessage \(member.name)", text: $draft, axis: .vertical)
