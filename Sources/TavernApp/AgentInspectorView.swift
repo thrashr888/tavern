@@ -5,7 +5,7 @@ import TavernCore
 /// Activity, Approvals, Schedule and Identity, then the Tailscale machine and the Pi connection.
 struct AgentInspectorView: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case activity = "Activity", services = "Services", about = "About"
+        case activity = "Activity", links = "Links", services = "Services", about = "About"
         var id: String { rawValue }
     }
 
@@ -49,6 +49,12 @@ struct AgentInspectorView: View {
                             }
                         } else {
                             placeholder("No activity until \(agent.name) is connected.")
+                        }
+                    case .links:
+                        if let session = model.session(for: agent.id) {
+                            LinksSection(session: session, agentName: agent.name)
+                        } else {
+                            placeholder("No links until \(agent.name) is connected.")
                         }
                     case .services:
                         if let host = DockerHost.hosts(for: model.roster).first(where: { $0.id == agent.tailscaleName }) {

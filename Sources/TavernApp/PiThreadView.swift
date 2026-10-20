@@ -127,7 +127,7 @@ struct PiThreadView: View {
                         TranscriptRow(item: TranscriptItem(
                             id: "streaming", role: .assistant, text: session.streamingText,
                             thinking: session.streamingThinking, date: Date()
-                        ), thinkingExpanded: session.streamingText.isEmpty)
+                        ), thinkingExpanded: session.streamingText.isEmpty, showsLinks: false)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -260,6 +260,8 @@ struct TranscriptRow: View {
     let item: TranscriptItem
     /// Live thinking starts open so a long think visibly moves; stored thinking starts collapsed.
     var thinkingExpanded = false
+    /// Preview chips for the message's links; off while a reply streams in, half-written.
+    var showsLinks = true
 
     var body: some View {
         switch item.role {
@@ -278,6 +280,9 @@ struct TranscriptRow: View {
                 VStack(alignment: .trailing, spacing: 6) {
                     if !parts.paths.isEmpty { InlineImages(paths: parts.paths) }
                     if !parts.text.isEmpty { userBubble(parts.text) }
+                    if showsLinks, case let urls = LinkPreviewPolicy.previewable(in: parts.text), !urls.isEmpty {
+                        LinkChipRow(urls: urls, trailing: true)
+                    }
                 }
             }
         case .assistant:
@@ -287,6 +292,9 @@ struct TranscriptRow: View {
                 }
                 if !item.text.isEmpty {
                     MarkdownText(text: item.text)
+                }
+                if showsLinks, case let urls = LinkPreviewPolicy.previewable(in: item.text), !urls.isEmpty {
+                    LinkChipRow(urls: urls)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
