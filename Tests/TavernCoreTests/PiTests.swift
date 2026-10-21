@@ -650,3 +650,22 @@ final class ToolCardTests: XCTestCase {
         XCTAssertNil(ToolCard(details: ["ui": ["server": "x", "resourceUri": "https://x.example"]], toolName: "t"), "only ui:// resources")
     }
 }
+
+final class HeartbeatRowTests: XCTestCase {
+    func testHeartbeatTurnsFoldIntoOneBackgroundRow() {
+        let t = Date()
+        let items = [
+            TranscriptItem(id: "1", role: .user, text: "Fix the build", date: t),
+            TranscriptItem(id: "2", role: .assistant, text: "Fixed.", date: t),
+            TranscriptItem(id: "3", role: .user, text: "[Heartbeat 2026-10-21T01:00:00Z] New since the last check:\n- [mail] m2 (subject: Deploy is done)\n- [linear] PAUL-9 (title: Tavern)\n\nHandle what's yours.", date: t),
+            TranscriptItem(id: "4", role: .assistant, text: "Drafted a reply to Rook.", date: t),
+            TranscriptItem(id: "5", role: .user, text: "Thanks", date: t),
+        ]
+        let rows = PiActivity.rows(from: items)
+        XCTAssertEqual(rows.map(\.id), ["1", "2", "background:3", "5"])
+        guard case .background(let run) = rows[2] else { return XCTFail() }
+        XCTAssertEqual(run.title, "2 new")
+        XCTAssertEqual(run.newItems.first, "[mail] m2 (subject: Deploy is done)")
+        XCTAssertEqual(run.reply, "Drafted a reply to Rook.")
+    }
+}

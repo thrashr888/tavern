@@ -67,17 +67,6 @@ struct GoalsView: View {
             }
         }
         .navigationTitle("Goals")
-        .toolbar {
-            ToolbarItem {
-                Button { creating = true } label: { Label("New Ticket", systemImage: "square.and.pencil") }
-                    .help("New Linear ticket, optionally for an agent")
-                    .disabled(model.linear == nil)
-            }
-            ToolbarItem {
-                Button { Task { await load(refresh: true) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .disabled(loading)
-            }
-        }
         .task { await load(refresh: false) }
         .onAppear { takeNewTicketRequest() }
         .onChange(of: model.newTicketRequested) { _, _ in takeNewTicketRequest() }
@@ -102,6 +91,26 @@ struct GoalsView: View {
     ]
 
     private var filters: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Button { creating = true } label: { Label("New Ticket", systemImage: "square.and.pencil") }
+                    .buttonStyle(PillButtonStyle())
+                    .help("New Linear ticket, optionally for an agent")
+                    .disabled(model.linear == nil)
+                Spacer()
+                Button { Task { await load(refresh: true) } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Refresh from Linear")
+                    .disabled(loading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            filterList
+        }
+    }
+
+    private var filterList: some View {
         List(selection: $filter) {
             row("All open", symbol: "square.stack", count: issues.count).tag(Filter.all)
             Section("Status") {

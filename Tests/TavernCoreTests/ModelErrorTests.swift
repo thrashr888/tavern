@@ -300,3 +300,21 @@ final class PiReactionNoteTests: XCTestCase {
         XCTAssertEqual(PiReactions.withoutNotes("No notes here"), "No notes here")
     }
 }
+
+final class MailSearchTests: XCTestCase {
+    func testThreadsMatchOnSubjectPeopleAndText() {
+        let roster = Roster.fixture
+        let member = roster.members.first!
+        let thread = MailThread(threadID: "t", messages: [
+            MailItem(id: "1", threadID: "t", subject: "Website: annual plan price", from: "Lark <lark@example.com>", author: nil, project: nil,
+                     date: Date(), snippet: "", body: "The pricing page still says $96."),
+            MailItem(id: "2", threadID: "t", subject: "Re: Website", from: "x@example.com", author: member.id, project: nil,
+                     date: Date(), snippet: "", body: "On it. PR is up."),
+        ])
+        XCTAssertTrue(thread.matches("annual", roster: roster))
+        XCTAssertTrue(thread.matches("lark pricing", roster: roster), "every word, anywhere in the thread")
+        XCTAssertTrue(thread.matches(member.name.lowercased(), roster: roster), "member names count")
+        XCTAssertTrue(thread.matches("  ", roster: roster))
+        XCTAssertFalse(thread.matches("pricing staging", roster: roster))
+    }
+}
