@@ -118,6 +118,9 @@ public enum TailscaleReader {
     }
 
     public static func read(paths: [String] = candidatePaths) async throws -> TailscaleStatus {
+        #if !os(macOS)
+        throw ReadError.notInstalled
+        #else
         guard let path = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             throw ReadError.notInstalled
         }
@@ -142,5 +145,6 @@ public enum TailscaleReader {
                 }
             }
         }
+        #endif
     }
 }

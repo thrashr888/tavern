@@ -15,4 +15,13 @@ public enum TavernPaths {
     }
 
     public static func file(_ name: String) -> URL? { base?.appendingPathComponent(name) }
+
+    /// The user's home folder; on iPhone, the app's own container.
+    public static var userHome: URL {
+        #if os(macOS)
+        FileManager.default.homeDirectoryForCurrentUser
+        #else
+        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        #endif
+    }
 }

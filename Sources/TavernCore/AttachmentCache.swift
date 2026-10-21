@@ -32,7 +32,7 @@ public enum AttachmentCache {
            let folder, FileManager.default.isReadableFile(atPath: folder.appendingPathComponent(name).path) {
             return folder.appendingPathComponent(name)
         }
-        let messages = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Messages/Attachments").path + "/"
+        let messages = TavernPaths.userHome.appendingPathComponent("Library/Messages/Attachments").path + "/"
         let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
         if resolved.path.hasPrefix(messages), FileManager.default.isReadableFile(atPath: resolved.path) { return resolved }
         return nil

@@ -15,6 +15,7 @@ public enum PiTransportError: Error, Equatable {
     case exited(status: Int32)
 }
 
+#if os(macOS)
 /// Runs a local Pi in RPC mode. Pi reads commands on stdin, writes records on stdout and
 /// diagnostics on stderr (which Tavern never parses).
 public final class PiProcessTransport: PiTransport, @unchecked Sendable {
@@ -93,3 +94,4 @@ public final class PiProcessTransport: PiTransport, @unchecked Sendable {
         try? handle?.close()
     }
 }
+#endif
