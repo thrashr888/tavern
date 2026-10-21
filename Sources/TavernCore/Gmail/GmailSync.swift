@@ -328,3 +328,20 @@ extension Array where Element == MailThread {
         filter { $0.messages.contains { $0.author == memberID } }.sorted { $0.lastDate > $1.lastDate }
     }
 }
+
+extension MailThread {
+    /// Whether every word of `query` appears somewhere in the thread: its subject, a sender's
+    /// address or member name, or a message's text. Case and accents don't matter.
+    public func matches(_ query: String, roster: Roster) -> Bool {
+        let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return true }
+        var haystack = [subject]
+        for message in messages {
+            haystack.append(message.from)
+            if let author = message.author, let name = roster.member(id: author)?.name { haystack.append(name) }
+            haystack.append(message.body.isEmpty ? message.snippet : message.body)
+        }
+        let text = haystack.joined(separator: "\n")
+        return words.allSatisfy { text.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+    }
+}

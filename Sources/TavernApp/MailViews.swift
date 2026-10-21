@@ -29,6 +29,8 @@ private struct MailFeedView: View {
     let projectID: String?
     let title: String
     @State private var selectedThread: String?
+    /// Filters the list: every word must appear in a thread's subject, senders or text.
+    @State private var query = ""
     /// Heartbeat mails are agents' hourly status; hidden from the list unless asked for.
     @AppStorage("tavern.mail.showHeartbeats") private var showHeartbeats = false
     /// Threads archived in Gmail are hidden unless asked for.
@@ -72,6 +74,7 @@ private struct MailFeedView: View {
         feed.threads(project: projectID)
             .filter { showHeartbeats || !$0.isHeartbeat }
             .filter { showArchived || !feed.isArchived($0) }
+            .filter { $0.matches(query, roster: model.roster) }
     }
 
     /// Selects the thread search or the Dashboard asked for, once.
@@ -83,13 +86,25 @@ private struct MailFeedView: View {
 
     private var threadList: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search threads", text: $query).textFieldStyle(.plain)
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.tertiary).help("Clear")
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            Divider()
             statusBar
             List(threads, selection: $selectedThread) { thread in
                 ThreadRow(thread: thread, roster: model.roster).tag(thread.threadID)
             }
             .overlay {
                 if threads.isEmpty {
-                    Text(feed.state == .syncing ? "Reading \(model.roster.party) mail…" : "No \(model.roster.party) threads here yet.")
+                    Text(!query.trimmingCharacters(in: .whitespaces).isEmpty ? "No threads match “\(query)”."
+                         : feed.state == .syncing ? "Reading \(model.roster.party) mail…" : "No \(model.roster.party) threads here yet.")
                         .foregroundStyle(.secondary)
                 }
             }

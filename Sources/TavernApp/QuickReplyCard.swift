@@ -25,11 +25,19 @@ final class QuickCardController: ObservableObject {
     private var clicked: String?
     private var lastClosed = Date.distantPast
     private var generation = 0
+    /// While ⌘K (or anything else on top) is open: no cards.
+    private var suspended = false
+
+    func setSuspended(_ value: Bool) {
+        suspended = value
+        generation += 1
+        if value { close() }
+    }
 
     func enterRow(_ id: String) {
         overRow = id
         generation += 1
-        guard clicked != id else { return }
+        guard clicked != id, !suspended else { return }
         if writing, active != nil, active != id { return }
         // Already showing one, or one just closed: switch now.
         if active != nil || Date().timeIntervalSince(lastClosed) < 0.6 {
@@ -39,7 +47,7 @@ final class QuickCardController: ObservableObject {
         let mine = generation
         Task {
             try? await Task.sleep(for: .milliseconds(700))
-            guard mine == generation, overRow == id, clicked != id else { return }
+            guard mine == generation, overRow == id, clicked != id, !suspended else { return }
             active = id
         }
     }
@@ -78,7 +86,7 @@ final class QuickCardController: ObservableObject {
         Task {
             try? await Task.sleep(for: .milliseconds(250))
             guard mine == generation, !overCard, !writing else { return }
-            if let row = overRow, row != clicked { active = row } else { close() }
+            if let row = overRow, row != clicked, !suspended { active = row } else { close() }
         }
     }
 

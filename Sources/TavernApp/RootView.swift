@@ -37,6 +37,8 @@ struct RootView: View {
                 .environmentObject(model)
         }
         .onReceive(NotificationCenter.default.publisher(for: .tavernOpenSearch)) { _ in searching = true }
+        // ⌘K on top: close the sidebar's hover card and hold new ones until it's gone.
+        .onChange(of: searching) { _, open in QuickCardController.shared.setSuspended(open) }
         // ⌘F finds in the open conversation; pages without one open Search instead.
         .onReceive(NotificationCenter.default.publisher(for: .tavernFind)) { _ in
             switch selection ?? .dashboard {
