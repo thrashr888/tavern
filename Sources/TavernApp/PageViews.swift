@@ -358,7 +358,7 @@ private struct SetupBanner: View {
             }
         }
         .padding(quiet ? 0 : 14)
-        .background(quiet ? Color.clear : Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(quiet ? Color.clear : Color.tavernAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .task { if model.discovered.isEmpty { await model.discoverAgents() } }
     }
 }

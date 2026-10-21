@@ -7,14 +7,14 @@ struct RootView: View {
     /// Last open page, by stable Tavern id. Restored at launch (Dashboard on first launch).
     @SceneStorage("tavern.page") private var pageKey: String = ""
     @AppStorage(TextScale.storageKey) private var textScale = TextScale.standard
-    @AppStorage(Theme.storageKey) private var theme = Theme.standard
     @State private var selection: Page?
     @State private var searching = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $selection)
-                .sepiaSidebar(theme)
+                .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
         } detail: {
             switch selection ?? .dashboard {
@@ -69,6 +69,8 @@ struct RootView: View {
             // TAVERN_PAGE (a page storage key, e.g. "agent:flint") opens a page at launch, for testing.
             let requested = ProcessInfo.processInfo.environment["TAVERN_PAGE"]
             selection = Page.restore(requested ?? (pageKey.isEmpty ? nil : pageKey), roster: model.roster)
+            // TAVERN_SETTINGS=1 opens Settings too, for screenshots.
+            if ProcessInfo.processInfo.environment["TAVERN_SETTINGS"] == "1" { openSettings() }
         }
         .task { await model.watchTailscale() }
         .task { await model.watchWake() }

@@ -289,10 +289,10 @@ struct PillButtonStyle: ButtonStyle {
             .padding(.trailing, 12)
             .frame(height: 32)
             .background(
-                selected ? AnyShapeStyle(Color.accentColor.opacity(0.25)) : AnyShapeStyle(.quaternary.opacity(configuration.isPressed ? 0.9 : 0.55)),
+                selected ? AnyShapeStyle(Color.tavernAccent.opacity(0.25)) : AnyShapeStyle(.quaternary.opacity(configuration.isPressed ? 0.9 : 0.55)),
                 in: Capsule()
             )
-            .overlay(Capsule().strokeBorder(selected ? Color.accentColor.opacity(0.6) : Color.clear))
+            .overlay(Capsule().strokeBorder(selected ? Color.tavernAccent.opacity(0.6) : Color.clear))
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(Capsule())
     }
@@ -580,7 +580,7 @@ private struct GoalDetail: View {
                             if member.id == owner?.id && !labelled {
                                 Text("Suggested").tavernFont(.caption, weight: .semibold)
                                     .padding(.horizontal, 6).padding(.vertical, 1)
-                                    .background(Color.accentColor.opacity(0.25), in: Capsule())
+                                    .background(Color.tavernAccent.opacity(0.25), in: Capsule())
                             }
                         }
                     }

@@ -52,7 +52,7 @@ struct SearchPalette: View {
                         .buttonStyle(.plain)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(scope == option ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12),
+                        .background(scope == option ? Color.tavernAccent.opacity(0.25) : Color.secondary.opacity(0.12),
                                     in: Capsule())
                 }
                 Spacer()
