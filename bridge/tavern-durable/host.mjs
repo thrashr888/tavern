@@ -45,7 +45,10 @@ const approvals = new Approvals((dialog) => dialog && broadcast(confirmRequest(d
 // MCP servers from <AGENT_CWD>/.pi/mcp.json become agent tools; their changes ask like risky shell.
 const mcpServers = await startServers({ cwd: AGENT_CWD, file: process.env.TAVERN_DURABLE_MCP, log });
 const mcp = mcpExtension(mcpServers);
-const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name));
+// PAP's start_task and finish_task only file the agent's calls under a task; they change nothing
+// the user has, so they don't ask. Its run (and send_feedback) still do.
+const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
+const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name)).map((tool) => tool.name));
 const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
