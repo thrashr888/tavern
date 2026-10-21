@@ -60,7 +60,12 @@ final class AgentAlerts: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func presenceChanged(agentID: String, name: String, presence: PiAgentSession.Presence) {
-        if lastPresence[agentID] == .working, presence == .idle, !NSApp.isActive {
+        // A heartbeat turn runs in the background; finishing one isn't news.
+        let background: Bool = {
+            if case .background = model?.session(for: agentID)?.rows.last { return true }
+            return false
+        }()
+        if lastPresence[agentID] == .working, presence == .idle, !NSApp.isActive, !background {
             post(AttentionItem(id: "settled-\(agentID)-\(Date().timeIntervalSince1970)", title: "\(name) finished",
                                body: "The turn settled.", page: .agent(id: agentID)), sound: false)
         }

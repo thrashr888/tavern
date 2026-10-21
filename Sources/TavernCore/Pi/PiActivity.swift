@@ -158,6 +158,8 @@ public struct PiWork: Equatable, Identifiable, Sendable {
 public enum PiThreadRow: Equatable, Identifiable, Sendable {
     case message(TranscriptItem)
     case work(PiWork)
+    /// A heartbeat and what the agent did about it, folded into one background row.
+    case background(BackgroundRun)
     /// An MCP Apps card a tool result came with, shown after the work that made it.
     case card(id: String, ToolCard)
 
@@ -166,15 +168,78 @@ public enum PiThreadRow: Equatable, Identifiable, Sendable {
         case .message(let item): return item.id
         case .work(let work): return "work:\(work.id)"
         case .card(let id, _): return "card:\(id)"
+        case .background(let run): return "background:\(run.id)"
         }
     }
 }
 
+/// A heartbeat turn: the host's message (what's new) and everything the agent did until the user
+/// next wrote. Shown collapsed, like a tool step, not as chat.
+public struct BackgroundRun: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var date: Date
+    /// The heartbeat message itself.
+    public var trigger: TranscriptItem
+    /// The agent's work and replies after it.
+    public var items: [TranscriptItem]
+
+    /// The new items the host listed ("- [mail] …" lines).
+    public var newItems: [String] {
+        trigger.text.components(separatedBy: "\n").filter { $0.hasPrefix("- [") }.map { String($0.dropFirst(2)) }
+    }
+
+    /// "2 new" for a check that found things; "Check-in" for the older every-beat prompt.
+    public var title: String {
+        let count = newItems.count
+        return count == 0 ? "Check-in" : "\(count) new"
+    }
+
+    /// The agent's last words on it.
+    public var reply: String? { items.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text }
+
+    public var rows: [PiThreadRow] { PiActivity.rows(from: items) }
+}
+
+extension TranscriptItem {
+    /// The host's heartbeat message (`[Heartbeat <time>] …`).
+    public var isHeartbeat: Bool { role == .user && text.hasPrefix("[Heartbeat ") }
+}
+
 public enum PiActivity {
+    /// Folds heartbeat turns into background rows, then tool runs into work rows.
+    public static func rows(from items: [TranscriptItem]) -> [PiThreadRow] {
+        var rows: [PiThreadRow] = []
+        var plain: [TranscriptItem] = []
+        var run: BackgroundRun?
+        func flushPlain() {
+            if !plain.isEmpty { rows += workRows(from: plain) }
+            plain = []
+        }
+        func flushRun() {
+            if let run { rows.append(.background(run)) }
+            run = nil
+        }
+        for item in items {
+            if item.isHeartbeat {
+                flushPlain()
+                flushRun()
+                run = BackgroundRun(id: item.id, date: item.date, trigger: item, items: [])
+            } else if run != nil, item.role != .user {
+                run?.items.append(item)
+            } else {
+                flushRun()
+                plain.append(item)
+            }
+        }
+        flushPlain()
+        flushRun()
+        return rows
+    }
+
     /// Folds tool results (and the call-only assistant turns that asked for them) into work rows.
     /// A step's duration runs from the assistant turn that called it to its result; a call-only
     /// turn's thinking becomes a thought step, running from the item before it to the turn.
-    public static func rows(from items: [TranscriptItem]) -> [PiThreadRow] {
+    static func workRows(from items: [TranscriptItem]) -> [PiThreadRow] {
         var rows: [PiThreadRow] = []
         var calls: [String: (call: PiToolCall, at: Date)] = [:]
         var steps: [PiStep] = []

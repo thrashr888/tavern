@@ -18,6 +18,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Approvals, approvalExtension } from "./approvals.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
+import { HeartbeatChecks, loadChecks, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
 import { RequestLog } from "./requests.mjs";
 
@@ -27,8 +28,9 @@ const AGENT_CWD = process.env.AGENT_CWD ?? process.cwd();
 const BIND = process.env.TAVERN_DURABLE_BIND ?? "127.0.0.1";
 const PORT = Number(process.env.TAVERN_DURABLE_PORT ?? 19011);
 const DEBUG = process.env.TAVERN_DURABLE_DEBUG === "1";
-// Heartbeat: every N minutes (default 30) the host gives the agent the prompt in
-// <AGENT_CWD>/HEARTBEAT.md, if that file exists. 0 turns it off.
+// Heartbeat: every N minutes (default 30). With <AGENT_CWD>/heartbeat.json the host runs its
+// checks itself (no model) and wakes the agent only for new items, with HEARTBEAT.md as the
+// instructions; without it, the agent gets HEARTBEAT.md every beat. 0 turns it off.
 const HEARTBEAT_MINUTES = Number(process.env.TAVERN_DURABLE_HEARTBEAT_MINUTES ?? 30);
 const HEARTBEAT_FILE = path.join(AGENT_CWD, "HEARTBEAT.md");
 // Risky tool calls wait for Paul: "risky" (default), "all" or "off". See approvals.mjs.
@@ -165,6 +167,11 @@ async function handle(socket, line) {
         log(`card called ${server.name}/${tool.name}`);
         return reply(true, { ...result, text: resultText(result) });
       }
+      case "heartbeat_check": {
+        // Runs the checks now and reports what's new, without waking the agent or marking it seen.
+        if (!heartbeatChecks) return reply(false, undefined, "no heartbeat.json for this agent");
+        return reply(true, await heartbeatChecks.run({ dryRun: true }));
+      }
       case "abort":
         await controller.abort();
         return reply(true);
@@ -186,6 +193,13 @@ async function handle(socket, line) {
 
 let lastHeartbeat = null;
 let nextHeartbeat = null;
+let lastCheck = null;
+let lastFound = 0;
+let lastCheckErrors = [];
+const heartbeatChecks = (() => {
+  const checks = loadChecks(AGENT_CWD);
+  return checks ? new HeartbeatChecks(mcpServers, checks, path.join(AGENT_CWD, ".heartbeat-state.json")) : null;
+})();
 
 function heartbeatPrompt() {
   try {
@@ -197,20 +211,37 @@ function heartbeatPrompt() {
 }
 
 function heartbeatState() {
-  if (HEARTBEAT_MINUTES <= 0 || !heartbeatPrompt()) return null;
-  return { everyMinutes: HEARTBEAT_MINUTES, last: lastHeartbeat, next: nextHeartbeat };
+  if (HEARTBEAT_MINUTES <= 0 || (!heartbeatPrompt() && !heartbeatChecks)) return null;
+  return { everyMinutes: HEARTBEAT_MINUTES, last: lastHeartbeat, next: nextHeartbeat,
+           checks: heartbeatChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors } : null };
 }
 
-/** Runs the heartbeat prompt on schedule; skips a beat while the agent is busy. */
+/** One beat: checks first when configured (waking the agent only for new items), else the prompt. */
+async function heartbeat() {
+  if (liveOf(view.current()).busy) return; // next beat; nothing is marked seen meanwhile
+  const prompt = heartbeatPrompt();
+  if (!heartbeatChecks) {
+    if (!prompt) return;
+    lastHeartbeat = new Date().toISOString();
+    background(controller.submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
+    return;
+  }
+  const { found, errors } = await heartbeatChecks.run();
+  lastCheck = new Date().toISOString();
+  lastFound = found.length;
+  lastCheckErrors = errors;
+  if (errors.length) log(`heartbeat checks: ${errors.map((e) => `${e.check}: ${e.error}`).join("; ")}`);
+  if (found.length && !liveOf(view.current()).busy) {
+    lastHeartbeat = lastCheck;
+    background(controller.submit(wakeMessage(found, prompt, lastCheck), "followUp"));
+  }
+}
+
 function scheduleHeartbeat(delayMs) {
   if (HEARTBEAT_MINUTES <= 0) return;
   nextHeartbeat = new Date(Date.now() + delayMs).toISOString();
-  setTimeout(() => {
-    const prompt = heartbeatPrompt();
-    if (prompt && !liveOf(view.current()).busy) {
-      lastHeartbeat = new Date().toISOString();
-      background(controller.submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
-    }
+  setTimeout(async () => {
+    try { await heartbeat(); } catch (error) { log(`heartbeat failed: ${error?.message ?? error}`); }
     scheduleHeartbeat(HEARTBEAT_MINUTES * 60_000);
   }, delayMs).unref();
 }
