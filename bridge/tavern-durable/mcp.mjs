@@ -3,6 +3,10 @@
 // tools to the agent as `<server>__<tool>`, and keeps MCP Apps cards (SEP-1865) with the results:
 // a tool whose `_meta.ui.resourceUri` names a `ui://` resource gets `details.ui`, and Tavern
 // reads that resource through the host to show the card.
+//
+// The agent's Personal Agent Proxy reads (mail, Linear, Docs) have no cards of their own; when the
+// agent has pi-bundle's "cards" server, the host attaches its card for them, with PAP's answer as
+// the card's structured content. That way they get cards without a second PAP login.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -198,6 +202,30 @@ export async function startServers({ cwd, file, log = () => {} }) {
   return started;
 }
 
+/** Which "cards" server card shows each PAP read, by PAP tool name. */
+const PAP_CARDS = {
+  emails_list: "ui://cards/mail", emails_get: "ui://cards/mail",
+  issues_list: "ui://cards/linear", issues_get: "ui://cards/linear",
+  files_list: "ui://cards/docs", files_get: "ui://cards/docs",
+};
+
+/** The card for a `pap__read` result: PAP's JSON answer (records, record or error) as it came. */
+export function papCard(servers, server, tool, args, result) {
+  const uri = server.name === "pap" && tool.name === "read" ? PAP_CARDS[args?.tool] : null;
+  if (!uri || !servers.some((s) => s.name === "cards")) return null;
+  let structuredContent = result?.structuredContent ?? null;
+  if (!structuredContent) {
+    const text = (result?.content ?? []).filter((c) => c?.type === "text").map((c) => c.text).join("\n");
+    try {
+      structuredContent = JSON.parse(text);
+    } catch {
+      structuredContent = { error: text || "No answer" };
+    }
+  }
+  if (result?.isError && !structuredContent?.error) structuredContent = { error: JSON.stringify(structuredContent).slice(0, 500) };
+  return { server: "cards", resourceUri: uri, structuredContent };
+}
+
 /** A Pi Durable extension offering every server's tools to the agent. */
 export function mcpExtension(servers) {
   const tools = servers.flatMap((server) =>
@@ -214,6 +242,10 @@ export function mcpExtension(servers) {
           const result = await server.request("tools/call", { name: tool.name, arguments: args ?? {} });
           const details = { mcp: { server: server.name, tool: tool.name } };
           if (ui) details.ui = { server: server.name, resourceUri: ui, structuredContent: result?.structuredContent ?? null };
+          else {
+            const card = papCard(servers, server, tool, args, result);
+            if (card) details.ui = card;
+          }
           return { content: [{ type: "text", text: resultText(result) }], isError: result?.isError === true, details };
         },
       };
@@ -222,11 +254,16 @@ export function mcpExtension(servers) {
   return { name: "tavern-mcp", tools };
 }
 
-/** Reads a card for Tavern: only `ui://` resources a server's own tool points at. */
+/**
+ * Reads a card for Tavern: only `ui://` resources a server's own tool points at, or the cards
+ * server's cards the host attaches to PAP reads.
+ */
 export async function readCard(servers, serverName, uri) {
   const server = servers.find((s) => s.name === serverName);
   if (!server) throw new Error(`no MCP server ${serverName}`);
-  if (!server.tools.some((tool) => uiResourceOf(tool) === uri)) throw new Error(`${uri} isn't a card of ${serverName}`);
+  const known = server.tools.some((tool) => uiResourceOf(tool) === uri)
+    || (serverName === "cards" && Object.values(PAP_CARDS).includes(uri));
+  if (!known) throw new Error(`${uri} isn't a card of ${serverName}`);
   const result = await server.request("resources/read", { uri });
   const content = (result?.contents ?? []).find((c) => c.uri === uri) ?? result?.contents?.[0];
   if (!content || !String(content.mimeType ?? "").startsWith("text/html")) throw new Error(`${uri} isn't an HTML card`);

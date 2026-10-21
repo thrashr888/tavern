@@ -62,3 +62,29 @@ test("a server that drops starts again, and calls wait for it", async () => {
     server.close();
   }
 });
+
+test("PAP reads get the cards server's card, with PAP's answer as its content", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-mcp-"));
+  const mail = path.join(dir, "mail.json");
+  fs.writeFileSync(mail, JSON.stringify([{ id: "m1", values: { subject: "Deploy is done" } }]));
+  fs.mkdirSync(path.join(dir, ".pi"));
+  fs.writeFileSync(path.join(dir, ".pi", "mcp.json"), JSON.stringify({ mcpServers: {
+    pap: { command: process.execPath, args: [here("./fake-pap.mjs")], env: { FAKE_PAP_MAIL: mail } },
+    cards: { command: process.execPath, args: [here("./fake-cards.mjs")] },
+  } }));
+  const servers = await startServers({ cwd: dir });
+  try {
+    const read = mcpExtension(servers).tools.find((t) => t.name === "pap__read");
+    const task = "tsk0000000000000000000001";
+    const ui = (await read.execute({ task, connection: "cmvh8sg47001fra01oukv8tvd", tool: "emails_list", params: {} })).details.ui;
+    assert.deepEqual(ui, { server: "cards", resourceUri: "ui://cards/mail", structuredContent: { records: [{ id: "m1", values: { subject: "Deploy is done" } }] } });
+    const failed = (await read.execute({ task, connection: "elsewhere", tool: "issues_get" })).details.ui;
+    assert.equal(failed.resourceUri, "ui://cards/linear");
+    assert.equal(failed.structuredContent.error, "bad connection");
+    assert.equal((await read.execute({ task, connection: "cmvh8sg47001fra01oukv8tvd", tool: "ranges_read" })).details.ui, undefined, "no card for this one");
+    assert.equal((await readCard(servers, "cards", "ui://cards/mail")).html, "<p>ui://cards/mail</p>");
+    await assert.rejects(readCard(servers, "cards", "ui://cards/other"), /isn't a card/);
+  } finally {
+    for (const s of servers) s.close();
+  }
+});
