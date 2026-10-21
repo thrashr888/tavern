@@ -63,6 +63,7 @@ struct EmojiDraftButton: View {
                 }
             }
             .padding(10)
+            .themedSurface()
         }
     }
 }
@@ -90,6 +91,7 @@ struct AddReactionButton: View {
                 }
             }
             .padding(10)
+            .themedSurface()
         }
     }
 }

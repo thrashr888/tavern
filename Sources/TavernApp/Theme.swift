@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TavernCore
 
 /// Tavern's look: follow the system, light, dark (the default), or one of the party's own:
 /// Parchment (a scroll, light) and Hearth (burnt umber and dark oak by candlelight).
@@ -67,17 +68,21 @@ struct ThemePalette {
     var sidebar: Color
     var ink: Color
     var accent: Color
+    /// Text on the accent, such as the selected sidebar row.
+    var onAccent: Color
 
     static let parchment = ThemePalette(
         page: Color(red: 0.953, green: 0.910, blue: 0.812),
         sidebar: Color(red: 0.882, green: 0.812, blue: 0.659),
         ink: Color(red: 0.231, green: 0.165, blue: 0.102),
-        accent: Color(red: 0.545, green: 0.290, blue: 0.110))
+        accent: Color(red: 0.545, green: 0.290, blue: 0.110),
+        onAccent: Color(red: 0.980, green: 0.953, blue: 0.890))
     static let hearth = ThemePalette(
         page: Color(red: 0.165, green: 0.118, blue: 0.086),
         sidebar: Color(red: 0.118, green: 0.082, blue: 0.059),
         ink: Color(red: 0.933, green: 0.878, blue: 0.784),
-        accent: Color(red: 0.882, green: 0.588, blue: 0.247))
+        accent: Color(red: 0.882, green: 0.588, blue: 0.247),
+        onAccent: Color(red: 0.165, green: 0.098, blue: 0.051))
 }
 
 extension Color {
@@ -113,8 +118,26 @@ struct ThemedContent: ViewModifier {
     }
 }
 
+/// A floating surface (palette, popover, sheet, hover card) in a party theme: page color, ink
+/// and accent. Unlike `themed()`, it doesn't redraw itself or set the app's appearance.
+struct ThemedSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if let palette = Theme.current.palette {
+            content
+                .backgroundStyle(palette.page)
+                .foregroundStyle(palette.ink)
+                .tint(palette.accent)
+                .scrollContentBackground(.hidden)
+                .background(palette.page)
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
     func themed() -> some View { modifier(ThemedContent()) }
+    func themedSurface() -> some View { modifier(ThemedSurface()) }
 
     /// The sidebar's own darker color in a party theme; the system sidebar otherwise.
     @ViewBuilder func themedSidebar(_ theme: Theme) -> some View {
@@ -123,6 +146,54 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+/// A sidebar link whose selected row, in a party theme, is the theme's accent with its own
+/// text color instead of the system's blue.
+struct SidebarLink<Label: View>: View {
+    let selection: Page?
+    let value: Page
+    @ViewBuilder let label: () -> Label
+
+    init(selection: Page?, value: Page, @ViewBuilder label: @escaping () -> Label) {
+        self.selection = selection
+        self.value = value
+        self.label = label
+    }
+
+    var body: some View {
+        let link = NavigationLink(value: value, label: label)
+        if let palette = Theme.current.palette, selection == value {
+            link
+                .foregroundStyle(palette.onAccent)
+                .listRowBackground(RoundedRectangle(cornerRadius: 8).fill(palette.accent).padding(.horizontal, 10))
+        } else {
+            link
+        }
+    }
+}
+
+/// Turns off the sidebar's system selection color in a party theme, so `SidebarLink` draws its own.
+struct SidebarHighlight: NSViewRepresentable {
+    let custom: Bool
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            var node: NSView? = view
+            while let current = node, !(current is NSSplitView) { node = current.superview }
+            guard let root = node else { return }
+            for table in Self.tables(in: root) {
+                table.selectionHighlightStyle = custom ? .none : .sourceList
+            }
+        }
+    }
+
+    private static func tables(in view: NSView) -> [NSTableView] {
+        if let table = view as? NSTableView { return [table] }
+        return view.subviews.flatMap(tables(in:))
     }
 }
 

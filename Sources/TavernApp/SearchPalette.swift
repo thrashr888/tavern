@@ -26,6 +26,8 @@ struct SearchPalette: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: Page?
+    /// Closes the palette when it's shown as an overlay rather than a sheet.
+    var onClose: (() -> Void)? = nil
     @State private var query = ""
     @State private var scope: Scope = .all
     @State private var local: [Result] = []
@@ -95,7 +97,7 @@ struct SearchPalette: View {
                 .opacity(0)
             Button("") { move(1) }.keyboardShortcut(.downArrow, modifiers: []).opacity(0)
             Button("") { move(-1) }.keyboardShortcut(.upArrow, modifiers: []).opacity(0)
-            Button("") { dismiss() }.keyboardShortcut(.cancelAction).opacity(0)
+            Button("") { close() }.keyboardShortcut(.cancelAction).opacity(0)
         }
         .onAppear { focused = true }
         .task(id: query) { await runSearch() }
@@ -218,7 +220,11 @@ struct SearchPalette: View {
         } else if let url = result.external {
             NSWorkspace.shared.open(url)
         }
-        dismiss()
+        close()
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 }
 

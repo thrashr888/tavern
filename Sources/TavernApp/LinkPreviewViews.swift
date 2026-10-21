@@ -81,7 +81,7 @@ struct LinkChip: View {
         }
         .buttonStyle(.plain)
         .help(url.absoluteString)
-        .popover(isPresented: $showing, arrowEdge: .bottom) { LinkCard(url: url) }
+        .popover(isPresented: $showing, arrowEdge: .bottom) { LinkCard(url: url).themedSurface() }
         .onAppear { previews.request(url) }
     }
 }
@@ -225,7 +225,7 @@ private struct LinkListRow: View {
         }
         .buttonStyle(.plain)
         .help(url.absoluteString)
-        .popover(isPresented: $showing, arrowEdge: .leading) { LinkCard(url: url) }
+        .popover(isPresented: $showing, arrowEdge: .leading) { LinkCard(url: url).themedSurface() }
         .onAppear { previews.request(url) }
     }
 

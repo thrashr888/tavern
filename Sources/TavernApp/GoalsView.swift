@@ -383,7 +383,9 @@ private struct NewTicketSheet: View {
     @State private var working = false
     @State private var error: String?
 
-    var body: some View {
+    var body: some View { sheet.themedSurface() }
+
+    @ViewBuilder private var sheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New ticket").tavernFont(.title3, weight: .semibold)
             TextField("Title", text: $title).textFieldStyle(.roundedBorder)
@@ -776,7 +778,9 @@ private struct SendToAgentSheet: View {
     let send: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    var body: some View { sheet.themedSurface() }
+
+    @ViewBuilder private var sheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 AvatarView(member: agent, size: 36)
