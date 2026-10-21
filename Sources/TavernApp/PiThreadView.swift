@@ -22,11 +22,6 @@ struct PiThreadView: View {
                     findQuery = ""
                 }
             }
-            if let dialog = session.dialog {
-                DialogBanner(dialog: dialog) { answer in
-                    Task { await session.answer(answer) }
-                }
-            }
             transcript
             composer
         }
@@ -75,6 +70,10 @@ struct PiThreadView: View {
             .padding(.vertical, 5)
             .background(.regularMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(.quaternary))
+            // Like Muse: the pill opens (and closes) the agent's panel.
+            .contentShape(Capsule())
+            .onTapGesture { NotificationCenter.default.post(name: .tavernToggleInspector, object: nil) }
+            .help("Show or hide \(agent?.name ?? "the agent")'s panel")
             Spacer()
         }
         .padding(.vertical, 8)
@@ -108,7 +107,10 @@ struct PiThreadView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     let matches = findMatchIDs
                     let currentMatch = matches.indices.contains(findIndex) ? matches[findIndex] : nil
-                    ForEach(session.rows) { row in
+                    ForEach(HeartbeatRun.grouped(session.rows)) { group in
+                        switch group {
+                        case .heartbeats(let runs): HeartbeatGroupRow(runs: runs, session: session)
+                        case .row(let row):
                         switch row {
                         case .message(let item):
                             TranscriptRow(item: item, reactions: session.reactions[item.id] ?? []) { emoji in
@@ -118,6 +120,7 @@ struct PiThreadView: View {
                         case .work(let work): WorkRow(work: work)
                         case .card(_, let card): ToolCardView(card: card, session: session)
                         case .background(let run): HeartbeatRow(run: run, session: session)
+                        }
                         }
                     }
                     ForEach(session.pendingMessages) { item in
@@ -167,6 +170,13 @@ struct PiThreadView: View {
     /// A rounded card: the message field on top, chips and actions underneath.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // What the agent is waiting on sits where you answer, just above the composer.
+            if let dialog = session.dialog {
+                DialogBanner(dialog: dialog) { answer in
+                    Task { await session.answer(answer) }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let error = session.lastError {
                 Label(ModelError.parse(error).summary, systemImage: "exclamationmark.triangle")
                     .tavernFont(.caption).foregroundStyle(.orange).lineLimit(2)
@@ -676,19 +686,28 @@ private struct ThinkingView: View {
     }
 }
 
-/// The loud "waiting on you" state for extension dialogs that pause the agent.
+/// The loud "waiting on you" state for extension dialogs that pause the agent, shown above the
+/// composer: what it wants, the command in full, and the answers.
 struct DialogBanner: View {
     let dialog: PiDialog
     let onAnswer: (PiDialogAnswer) -> Void
     @State private var text = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Waiting on you: \(dialog.title)", systemImage: "hand.raised.fill")
-                .tavernFont(.headline)
-            if let message = dialog.message {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(dialog.title, systemImage: "hand.raised.fill")
+                .tavernFont(.callout, weight: .semibold)
+                .foregroundStyle(.orange)
+            if let message = dialog.message, !message.isEmpty {
                 if dialog.isApproval {
-                    Text(message).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(12)
+                    ScrollView {
+                        Text(message).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
                 } else {
                     Text(message)
                 }
@@ -697,17 +716,19 @@ struct DialogBanner: View {
             case .confirm where dialog.isApproval:
                 // No default key: Return shouldn't run a risky command.
                 HStack {
-                    Button("Allow") { onAnswer(.confirmed(true)) }
-                    Button("Deny") { onAnswer(.confirmed(false)) }
+                    Spacer()
+                    Button("Deny") { onAnswer(.confirmed(false)) }.controlSize(.large)
+                    Button("Allow") { onAnswer(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
                 }
             case .confirm:
                 HStack {
-                    Button("Yes") { onAnswer(.confirmed(true)) }.keyboardShortcut(.defaultAction)
-                    Button("No") { onAnswer(.confirmed(false)) }
+                    Spacer()
                     Button("Cancel") { onAnswer(.cancelled) }
+                    Button("No") { onAnswer(.confirmed(false)) }
+                    Button("Yes") { onAnswer(.confirmed(true)) }.keyboardShortcut(.defaultAction)
                 }
             case .select:
-                HStack {
+                FlowLayout(spacing: 8) {
                     ForEach(dialog.options, id: \.self) { option in
                         Button(option) { onAnswer(.value(option)) }
                     }
@@ -719,13 +740,15 @@ struct DialogBanner: View {
                     .lineLimit(dialog.method == .editor ? 3...10 : 1...3)
                     .onAppear { text = dialog.prefill ?? "" }
                 HStack {
-                    Button("Submit") { onAnswer(.value(text)) }.keyboardShortcut(.defaultAction)
+                    Spacer()
                     Button("Cancel") { onAnswer(.cancelled) }
+                    Button("Submit") { onAnswer(.value(text)) }.keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.15))
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.orange.opacity(0.45)))
     }
 }
