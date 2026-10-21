@@ -343,6 +343,9 @@ private struct SetupBanner: View {
                     Button("Open Settings") { openSettings() }.buttonStyle(PillButtonStyle())
                 }
             }
+            if model.serviceRoute == .proxy, let feed = model.mail {
+                ProxyBannerRow(feed: feed)
+            }
             ForEach(model.discovered) { agent in
                 HStack(spacing: 10) {
                     Circle().fill(Color(hex: agent.card.avatarColor ?? "#6b5b95")).frame(width: 26, height: 26)
@@ -354,10 +357,35 @@ private struct SetupBanner: View {
                 }
             }
         }
-        .padding(model.hasRosterFile && model.discovered.isEmpty ? 0 : 14)
-        .background(model.hasRosterFile && model.discovered.isEmpty ? Color.clear : Color.accentColor.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 12))
+        .padding(quiet ? 0 : 14)
+        .background(quiet ? Color.clear : Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .task { if model.discovered.isEmpty { await model.discoverAgents() } }
+    }
+}
+
+extension SetupBanner {
+    /// Nothing to set up: no example party, no found agents, no sign-in waiting.
+    private var quiet: Bool {
+        model.hasRosterFile && model.discovered.isEmpty && !(model.serviceRoute == .proxy && model.mail?.state == .signedOut)
+    }
+}
+
+/// "Sign in to Personal Agent Proxy for party mail and Linear", until it's done.
+private struct ProxyBannerRow: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var feed: MailFeed
+
+    var body: some View {
+        if feed.state == .signedOut || feed.state == .signingIn {
+            HStack(spacing: 10) {
+                Image(systemName: "person.badge.key").foregroundStyle(.tint)
+                Text("Sign in to Personal Agent Proxy for \(model.roster.party) mail and Linear.")
+                Spacer()
+                Button(feed.state == .signingIn ? "Waiting…" : "Sign In") { Task { await model.signInToProxy() } }
+                    .buttonStyle(PillButtonStyle(selected: true))
+                    .disabled(feed.state == .signingIn)
+            }
+        }
     }
 }
 

@@ -48,8 +48,12 @@ struct GoalsView: View {
 
     var body: some View {
         Group {
-            if model.linear == nil {
-                note("No Linear key on this Mac", "Goals reads open PAUL issues with the key at ~/.config/linear-key. Read queries only.")
+            if model.linear == nil, model.serviceRoute == .proxy {
+                note("No Linear team yet", "Goals reads a Linear team's open issues through Personal Agent Proxy. Add the team key in Settings > Party.")
+            } else if model.linear == nil {
+                note("No Linear key on this Mac", "Goals reads open issues with the key at ~/.config/linear-key, for the team key in Settings > Party.")
+            } else if model.linear?.viaProxy == true, model.mail?.state == .signedOut {
+                ProxySignInPrompt(purpose: "to read your Linear goals")
             } else if let error, issues.isEmpty {
                 note("Couldn't load Linear", error)
             } else if issues.isEmpty && loading {

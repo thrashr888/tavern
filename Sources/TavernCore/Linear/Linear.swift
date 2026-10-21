@@ -115,14 +115,26 @@ public enum LinearError: Error, Equatable, CustomStringConvertible {
 /// `~/.config/linear-key`, sends queries only, never mutations. Agents do their own Linear writes.
 public actor LinearSource {
     public let teamKey: String
-    private let http: LinearHTTP
+    private let http: LinearHTTP?
+    /// Set when Linear comes through Personal Agent Proxy instead of a key on this Mac.
+    private let proxy: PAPLinear?
     private var cachedGoals: (date: Date, issues: [LinearIssue])?
     public var cacheLifetime: TimeInterval = 120
 
     public init(http: LinearHTTP, teamKey: String = "TEAM") {
         self.http = http
         self.teamKey = teamKey
+        proxy = nil
     }
+
+    /// Linear through Personal Agent Proxy's Linear connection, with PAP's permissions.
+    public init(proxy client: PAPClient, teamKey: String) {
+        http = nil
+        self.teamKey = teamKey
+        proxy = PAPLinear(client: client, teamKey: teamKey)
+    }
+
+    public nonisolated var viaProxy: Bool { proxy != nil }
 
     /// The live source, or nil when this Mac has no key file.
     public static func live(teamKey: String, keyURL: URL = LinearSource.defaultKeyURL) -> LinearSource? {
@@ -144,6 +156,11 @@ public actor LinearSource {
         if !refresh, let cached = cachedGoals, Date().timeIntervalSince(cached.date) < cacheLifetime {
             return cached.issues
         }
+        if let proxy {
+            let issues = try await proxy.openIssues()
+            cachedGoals = (Date(), issues)
+            return issues
+        }
         let query = """
             query Goals($team: String!) {
               issues(first: 250, orderBy: updatedAt,
@@ -161,6 +178,7 @@ public actor LinearSource {
     public func search(_ text: String) async throws -> [LinearIssue] {
         let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else { return [] }
+        if let proxy { return try await proxy.search(term) }
         let query = """
             query Search($team: String!, $term: String!) {
               issues(first: 20, orderBy: updatedAt,
@@ -181,6 +199,7 @@ public actor LinearSource {
 
     /// One issue's description, for the Goals detail pane.
     public func detail(_ identifier: String) async throws -> LinearIssueDetail {
+        if let proxy { return try await proxy.detail(identifier) }
         let json = try await runRaw("""
             query Issue($id: String!) { issue(id: $id) { description } }
             """, variables: ["id": .string(identifier)])
@@ -189,6 +208,7 @@ public actor LinearSource {
 
     /// A page of an issue's comments, newest first, and the cursor for the next (older) page.
     public func comments(_ identifier: String, after cursor: String? = nil, pageSize: Int = 20) async throws -> (comments: [LinearComment], next: String?) {
+        if let proxy { return try await proxy.comments(identifier, after: cursor, pageSize: pageSize) }
         var variables: [String: JSONValue] = ["id": .string(identifier), "first": .number(Double(pageSize))]
         if let cursor { variables["after"] = .string(cursor) }
         let json = try await runRaw("""
@@ -215,6 +235,11 @@ public actor LinearSource {
     /// Labels an issue `agent:<id>` (2026-10-18) and takes any other `agent:` label off,
     /// creating the label the first time an agent gets one. Other labels are left alone.
     public func assignAgentLabel(issue identifier: String, agentID: String) async throws {
+        if let proxy {
+            try await proxy.assignAgentLabel(issue: identifier, agentID: agentID)
+            cachedGoals = nil
+            return
+        }
         let name = Self.agentLabelName(agentID)
         let lookup = try await runRaw("""
             query Assign($id: String!, $name: String!) {
@@ -257,6 +282,7 @@ public actor LinearSource {
 
     /// The team's workflow states (Backlog, Todo, In Progress…), in board order.
     public func workflowStates() async throws -> [LinearState] {
+        if let proxy { return try await proxy.workflowStates() }
         let json = try await runRaw("""
             query States($team: String!) {
               workflowStates(filter: { team: { key: { eq: $team } } }) { nodes { id name type position } }
@@ -280,6 +306,11 @@ public actor LinearSource {
         if let priority { input["priority"] = .number(Double(priority)) }
         if let projectID { input["projectId"] = projectID.map(JSONValue.string) ?? .null }
         guard !input.isEmpty else { return }
+        if let proxy {
+            try await proxy.updateIssue(identifier, title: title, description: description, stateID: stateID, priority: priority, projectID: projectID)
+            cachedGoals = nil
+            return
+        }
         _ = try await mutate("issueUpdate", """
             mutation issueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }
             """, variables: ["id": .string(identifier), "input": .object(input)])
@@ -288,6 +319,7 @@ public actor LinearSource {
 
     /// The team's projects, for the New Ticket sheet.
     public func projects() async throws -> [LinearProject] {
+        if let proxy { return try await proxy.projects() }
         let json = try await runRaw("""
             query Projects($team: String!) {
               teams(filter: { key: { eq: $team } }) { nodes { id projects(first: 100) { nodes { id name state } } } }
@@ -305,6 +337,10 @@ public actor LinearSource {
     /// Files a new issue in the team (2026-10-18: Tavern may create tickets), optionally in a
     /// project and labelled for an agent. Returns its identifier and URL.
     public func createIssue(title: String, description: String, projectID: String?, agentID: String?) async throws -> (identifier: String, url: URL?) {
+        if let proxy {
+            cachedGoals = nil
+            return try await proxy.createIssue(title: title, description: description, projectID: projectID, agentID: agentID)
+        }
         let team = try await runRaw("""
             query Team($team: String!) { teams(filter: { key: { eq: $team } }) { nodes { id } } }
             """, variables: ["team": .string(teamKey)])
@@ -348,6 +384,7 @@ public actor LinearSource {
 
     private func send(_ query: String, variables: [String: JSONValue]) async throws -> JSONValue {
         let body = try JSONValue.object(["query": .string(query), "variables": .object(variables)]).encoded()
+        guard let http else { throw LinearError.noKey }
         let (data, status) = try await http.post(body)
         guard status == 200 else { throw LinearError.http(status) }
         let json = try JSONValue.decode(data)

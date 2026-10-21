@@ -126,7 +126,11 @@ private struct MailFeedView: View {
         return "Synced \(date.formatted(date: .omitted, time: .shortened))"
     }
 
-    private var connectPrompt: some View {
+    @ViewBuilder private var connectPrompt: some View {
+        if feed.viaProxy { ProxySignInPrompt(purpose: "to read \(model.roster.party) threads") } else { gmailPrompt }
+    }
+
+    private var gmailPrompt: some View {
         VStack(spacing: 12) {
             Image(systemName: "envelope.badge").font(.system(size: 36)).foregroundStyle(.secondary)
             Text("Connect Gmail to read \(model.roster.party) threads").tavernFont(.title3, weight: .semibold)
@@ -217,10 +221,10 @@ private struct ThreadReader: View {
                     HStack {
                         Label(error, systemImage: "exclamationmark.triangle").tavernFont(.caption).foregroundStyle(.orange)
                         Spacer()
-                        Button("Reconnect Gmail") {
+                        Button(feed.viaProxy ? "Sign In Again" : "Reconnect Gmail") {
                             Task {
                                 await feed.signOut()
-                                await feed.signIn { NSWorkspace.shared.open($0) }
+                                await feed.signIn { url in Task { @MainActor in NSWorkspace.shared.open(url) } }
                             }
                         }
                         .buttonStyle(PillButtonStyle())

@@ -55,8 +55,18 @@ final class AppModel: ObservableObject {
     @Published var tailscaleError: String?
     /// The read-only party mail feed; nil until started or without an event store.
     @Published var mail: MailFeed?
-    /// Linear for Goals and ⌘K; nil without ~/.config/linear-key or a `linearTeam` in the roster.
+    /// Linear for Goals and ⌘K; nil without a `linearTeam` in the roster, or, going direct, without
+    /// ~/.config/linear-key.
     let linear: LinearSource?
+    /// Mail and Linear through Personal Agent Proxy, or this Mac's own Gmail client and Linear key.
+    /// Read at launch; a change in Settings applies the next time Tavern opens.
+    let serviceRoute = ServiceRoute.current()
+    /// Tavern's Personal Agent Proxy sign-in and MCP client (used when `serviceRoute` is `.proxy`).
+    let proxyAuth: PAPOAuth
+    let proxy: PAPClient
+    /// The accounts PAP lets Tavern use, as last read, for Settings.
+    @Published private(set) var proxyConnections: [PAPConnection]?
+    @Published private(set) var proxyError: String?
     /// A mail thread to select when the Mail page next shows (from search or the Dashboard).
     @Published var focusedMailThread: String?
     /// An issue to select when Goals next shows (from an agent's task list).
@@ -114,7 +124,14 @@ final class AppModel: ObservableObject {
         roster = loaded
         rosterLoadError = loadError
         hasRosterFile = Roster.defaultURL().map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-        linear = loaded.linearTeam.flatMap { LinearSource.live(teamKey: $0) }
+        let auth = PAPOAuth()
+        let client = PAPClient.live(oauth: auth)
+        proxyAuth = auth
+        proxy = client
+        let route = serviceRoute
+        linear = loaded.linearTeam.flatMap { team in
+            route == .proxy ? LinearSource(proxy: client, teamKey: team) : LinearSource.live(teamKey: team)
+        }
         assignments = assignmentStore?.load() ?? []
         do {
             store = try EventStore(path: EventStore.defaultURL().path)
@@ -349,7 +366,9 @@ final class AppModel: ObservableObject {
     /// Sets up the mail feed and polls if Gmail is already connected on this Mac.
     func startMail() async {
         guard mail == nil, let store else { return }
-        let feed = await MailFeed.live(store: store) { [unowned self] in self.roster }
+        let feed = serviceRoute == .proxy
+            ? await MailFeed.proxy(store: store, oauth: proxyAuth, client: proxy) { [unowned self] in self.roster }
+            : await MailFeed.live(store: store) { [unowned self] in self.roster }
         mail = feed
         mailWatch = feed.$threads.sink { [weak self] threads in
             self?.lastSeen = threads.lastSeen()
@@ -357,6 +376,34 @@ final class AppModel: ObservableObject {
             self?.checkAttention()
         }
         feed.startPolling()
+    }
+
+    /// Signs Tavern in to Personal Agent Proxy (mail and Linear share the sign-in), then reads
+    /// what it may use and refreshes Goals.
+    func signInToProxy() async {
+        if mail == nil { await startMail() }
+        await mail?.signIn { url in Task { @MainActor in NSWorkspace.shared.open(url) } }
+        await loadProxyConnections()
+        if linear != nil { _ = try? await loadOpenIssues(refresh: true) }
+    }
+
+    func signOutOfProxy() async {
+        await mail?.signOut()
+        await proxyAuth.signOut()
+        proxyConnections = nil
+    }
+
+    func loadProxyConnections() async {
+        guard await proxyAuth.isSignedIn else {
+            proxyConnections = nil
+            return
+        }
+        do {
+            proxyConnections = try await proxy.connections(refresh: true)
+            proxyError = nil
+        } catch {
+            proxyError = String(describing: error)
+        }
     }
 
     /// New party mail that greets a Pi agent with `mailEvents` on goes to that agent as an event,

@@ -10,7 +10,7 @@ import Foundation
 /// Main-actor bound like the Pi sessions, so every write to the shared SQLite connection (and its
 /// transactions) happens on one thread.
 @MainActor
-public struct GmailSync {
+public struct GmailSync: MailSyncing {
     public static let cursorSource = "gmail"
     public static let messageKind = "mail.message"
 
@@ -253,8 +253,12 @@ public struct MailThread: Equatable, Identifiable, Sendable {
         for author in messages.compactMap(\.author) where !seen.contains(author) { seen.append(author) }
         return seen
     }
-    /// Opens the thread in Gmail on the web.
-    public var gmailURL: URL? { URL(string: "https://mail.google.com/mail/u/0/#all/\(threadID)") }
+    /// Opens the thread in Gmail on the web. A thread known only by its subject (mail read through
+    /// Personal Agent Proxy) opens at its latest message, whose id Gmail also takes.
+    public var gmailURL: URL? {
+        let id = threadID.hasPrefix(PAPMailSync.subjectThreadPrefix) ? messages.last?.id ?? "" : threadID
+        return URL(string: "https://mail.google.com/mail/u/0/#all/\(id)")
+    }
 
     /// Agents' hourly "… Heartbeat" status mails: useful as presence, noise in the thread list.
     public var isHeartbeat: Bool { subject.localizedCaseInsensitiveContains("heartbeat") }

@@ -21,6 +21,8 @@ struct SettingsView: View {
                 .tabItem { Label("Members", systemImage: "person.3") }
             LoreSettings(roster: roster)
                 .tabItem { Label("Lore", systemImage: "books.vertical") }
+            ProxySettings()
+                .tabItem { Label("Connections", systemImage: "link") }
         }
         .disabled(model.rosterLoadError != nil)
         .frame(width: 760, height: 560)

@@ -67,6 +67,16 @@ install leaves an agent card in `~/.config/pi-bundle/agents/`; Tavern reads the 
 and over your own SSH on the online Macs and Linux boxes of your tailnet, then offers "Found Ember
 on M3. Add?" on the Dashboard and in Settings. Without Tailscale it looks on this Mac only.
 
+Mail and Linear come through [Personal Agent Proxy](https://app.personalagentproxy.com) by
+default: sign in once from the Dashboard or Settings > Connections, choose "Custom MCP agent" named
+Tavern the first time, then give Tavern your Gmail (read, and archive if you like) and Linear (read,
+create and edit issues) in PAP. Tavern keeps the sign-in in your keychain. Through PAP, only mail sent
+from your own account can wake an agent (PAP doesn't pass Gmail's sender checks), and an
+`agent:<id>` label must already exist in Linear before Tavern can put it on an issue.
+
+A Mac that already has the two files below keeps reading Gmail and Linear directly; Settings >
+Connections switches between the two (on the next launch).
+
 - `roster.json`: what Settings saves. Keys it doesn't know are kept, and the first save leaves the
   old file as `roster.json.before-settings`. A few fields are still file-only (owner maps, trusted
   senders, sign-offs); see [docs/roster.example.json](docs/roster.example.json). Without the file
@@ -82,7 +92,7 @@ on M3. Add?" on the Dashboard and in Settings. Without Tailscale it looks on thi
 
 ## Layout
 
-- `Sources/TavernCore`: models, SQLite event store, roster, Pi RPC, Gmail, Linear, Docker. No UI.
+- `Sources/TavernCore`: models, SQLite event store, roster, Pi RPC, Gmail, Linear, Personal Agent Proxy, Docker. No UI.
 - `Sources/TavernApp`: the SwiftUI app.
 - `Tests/TavernCoreTests`: unit tests for the core.
 - `bridge/tavern-durable`: the Node host that keeps one Pi Durable session per agent.

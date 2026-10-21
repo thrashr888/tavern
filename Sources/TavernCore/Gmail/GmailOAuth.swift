@@ -219,6 +219,8 @@ public struct KeychainTokenStore: TokenStore {
 /// A one-shot HTTP listener on 127.0.0.1 that catches Google's redirect.
 final class LoopbackReceiver: @unchecked Sendable {
     private let listener: NWListener
+    /// What the browser shows once the redirect arrives.
+    var donePage = LoopbackReceiver.donePage
     private let queue = DispatchQueue(label: "tavern.oauth.loopback")
     // Touched only on `queue`.
     private var ready: CheckedContinuation<Void, Error>?
@@ -298,7 +300,7 @@ final class LoopbackReceiver: @unchecked Sendable {
                 Self.respond(connection, status: "404 Not Found", body: "")
                 return
             }
-            Self.respond(connection, status: "200 OK", body: Self.donePage)
+            Self.respond(connection, status: "200 OK", body: self?.donePage ?? Self.donePage)
             self?.finish(.success(query))
         }
     }

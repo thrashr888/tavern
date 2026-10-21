@@ -1,7 +1,27 @@
 import Foundation
 
-/// The read-only party mail feed the Mail page shows: signs in, polls, and lists threads from the
-/// event log. Never sends, labels, archives or deletes mail.
+/// Reads the party's mail into the event log: Gmail directly or through Personal Agent Proxy.
+@MainActor
+public protocol MailSyncing {
+    /// Stores new mail. Returns how many were new.
+    @discardableResult func sync() async throws -> Int
+    func archive(threadID: String) async throws
+    /// Threads that still have a message in the inbox; everything else is archived.
+    func inboxThreads() async throws -> Set<String>
+}
+
+/// A sign-in the mail feed drives: Google's own, or Personal Agent Proxy's.
+public protocol MailSignIn: Actor {
+    var isSignedIn: Bool { get }
+    func signIn(open: @escaping @Sendable (URL) -> Void) async throws
+    func signOut()
+}
+
+extension GmailOAuth: MailSignIn {}
+extension PAPOAuth: MailSignIn {}
+
+/// The party mail feed the Mail page shows: signs in, polls, and lists threads from the event log.
+/// Never sends, labels or deletes mail; archives a thread only when the user asks.
 @MainActor
 public final class MailFeed: ObservableObject {
     public enum State: Equatable {
@@ -23,14 +43,18 @@ public final class MailFeed: ObservableObject {
     public var pollInterval: Duration = .seconds(90)
 
     private let store: EventStore
-    private let oauth: GmailOAuth?
-    private let makeSync: @MainActor () -> GmailSync?
+    private let oauth: (any MailSignIn)?
+    private let makeSync: @MainActor () -> (any MailSyncing)?
+    /// Mail comes through Personal Agent Proxy rather than straight from Gmail.
+    public let viaProxy: Bool
     private var polling: Task<Void, Never>?
 
     /// `makeSync` builds the syncer once signed in; tests pass one over a fake `GmailHTTP`.
-    public init(store: EventStore, oauth: GmailOAuth?, signedIn: Bool, makeSync: @escaping @MainActor () -> GmailSync?) {
+    public init(store: EventStore, oauth: (any MailSignIn)?, signedIn: Bool, viaProxy: Bool = false,
+                makeSync: @escaping @MainActor () -> (any MailSyncing)?) {
         self.store = store
         self.oauth = oauth
+        self.viaProxy = viaProxy
         self.makeSync = makeSync
         state = oauth == nil ? .notConfigured : (signedIn ? .ready : .signedOut)
         reload()
@@ -52,6 +76,16 @@ public final class MailFeed: ObservableObject {
         }
     }
 
+    /// Wires mail through Personal Agent Proxy with Tavern's PAP sign-in; no client file needed.
+    public static func proxy(store: EventStore, oauth: PAPOAuth, client: PAPClient, roster current: @escaping @MainActor () -> Roster) async -> MailFeed {
+        let roster = current()
+        MailItem.reattribute(store: store, roster: roster)
+        let signedIn = await oauth.isSignedIn
+        return MailFeed(store: store, oauth: oauth, signedIn: signedIn, viaProxy: true) {
+            PAPMailSync(client: client, store: store, roster: current(), labelName: roster.mailLabelName)
+        }
+    }
+
     /// Why the last archive failed, if it did ("reconnect Gmail" when the token predates archiving).
     @Published public private(set) var archiveError: String?
     /// Threads archived from Tavern since launch, hidden even before the next sync confirms it.
@@ -65,8 +99,13 @@ public final class MailFeed: ObservableObject {
             inboxThreads?.remove(thread.threadID)
             archivedHere.insert(thread.threadID)
             archiveError = nil
+        } catch GmailError.notAuthorized where viaProxy {
+            archiveError = "Personal Agent Proxy doesn't let Tavern archive. Allow Archive for Tavern's Gmail there."
         } catch GmailError.notAuthorized {
             archiveError = "Gmail didn't allow archiving. Disconnect and connect Gmail again to grant it."
+        } catch PAPError.notAuthorized {
+            state = .signedOut
+            archiveError = "Sign in to Personal Agent Proxy again to archive."
         } catch {
             archiveError = "Couldn't archive: \(error)"
         }
@@ -111,7 +150,7 @@ public final class MailFeed: ObservableObject {
             inboxThreads = (try? await sync.inboxThreads()) ?? inboxThreads
             lastSync = Date()
             state = .ready
-        } catch GmailError.notAuthorized {
+        } catch GmailError.notAuthorized, PAPError.notAuthorized {
             state = .signedOut
         } catch GmailError.labelNotFound(let name) {
             state = .failed("No Gmail label named \(name)")
