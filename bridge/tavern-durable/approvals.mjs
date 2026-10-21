@@ -45,6 +45,8 @@ const SECRET_PATHS = [
   /(^|\/)(credentials|secrets?)(\.\w+)?$/i,
   /\.(pem|key|p12|keychain(-db)?)$/,
   /(^|\/)Library\/LaunchAgents(\/|$)/,
+  // Heartbeat checks run without asking, so changing what they call needs Paul.
+  /(^|\/)\.?heartbeat(-state)?\.json$/,
 ];
 
 /**

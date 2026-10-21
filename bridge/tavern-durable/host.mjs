@@ -169,8 +169,9 @@ async function handle(socket, line) {
       }
       case "heartbeat_check": {
         // Runs the checks now and reports what's new, without waking the agent or marking it seen.
-        if (!heartbeatChecks) return reply(false, undefined, "no heartbeat.json for this agent");
-        return reply(true, await heartbeatChecks.run({ dryRun: true }));
+        const checks = heartbeatChecks();
+        if (!checks) return reply(false, undefined, "no heartbeat.json for this agent");
+        return reply(true, await checks.run({ dryRun: true }));
       }
       case "abort":
         await controller.abort();
@@ -196,10 +197,11 @@ let nextHeartbeat = null;
 let lastCheck = null;
 let lastFound = 0;
 let lastCheckErrors = [];
-const heartbeatChecks = (() => {
+/** The checks in heartbeat.json, read on each beat so editing it needs no restart. */
+function heartbeatChecks() {
   const checks = loadChecks(AGENT_CWD);
   return checks ? new HeartbeatChecks(mcpServers, checks, path.join(AGENT_CWD, ".heartbeat-state.json")) : null;
-})();
+}
 
 function heartbeatPrompt() {
   try {
@@ -211,22 +213,24 @@ function heartbeatPrompt() {
 }
 
 function heartbeatState() {
-  if (HEARTBEAT_MINUTES <= 0 || (!heartbeatPrompt() && !heartbeatChecks)) return null;
+  const hasChecks = loadChecks(AGENT_CWD) != null;
+  if (HEARTBEAT_MINUTES <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
   return { everyMinutes: HEARTBEAT_MINUTES, last: lastHeartbeat, next: nextHeartbeat,
-           checks: heartbeatChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors } : null };
+           checks: hasChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors } : null };
 }
 
 /** One beat: checks first when configured (waking the agent only for new items), else the prompt. */
 async function heartbeat() {
   if (liveOf(view.current()).busy) return; // next beat; nothing is marked seen meanwhile
   const prompt = heartbeatPrompt();
-  if (!heartbeatChecks) {
+  const checks = heartbeatChecks();
+  if (!checks) {
     if (!prompt) return;
     lastHeartbeat = new Date().toISOString();
     background(controller.submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
     return;
   }
-  const { found, errors } = await heartbeatChecks.run();
+  const { found, errors } = await checks.run();
   lastCheck = new Date().toISOString();
   lastFound = found.length;
   lastCheckErrors = errors;
