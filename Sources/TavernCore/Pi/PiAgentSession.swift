@@ -105,6 +105,7 @@ public final class PiAgentSession: ObservableObject {
     @Published public private(set) var lastConnectError: String?
 
     private var wantsConnection = false
+    private var connecting = false
     private var attempts = 0
     private var reconnectTask: Task<Void, Never>?
     /// Where the running live thought starts in `streamingThinking`.
@@ -114,7 +115,11 @@ public final class PiAgentSession: ObservableObject {
         wantsConnection = true
         reconnectTask?.cancel()
         reconnectTask = nil
-        guard client == nil else { return }
+        // A page and the app can both ask at once; a second connection would replace the first
+        // one's listener and drop what the host sent it on connect (a waiting approval).
+        guard client == nil, !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         if presence == .disconnected { presence = .connecting }
         do {
             let client = PiClient(transport: try makeTransport())

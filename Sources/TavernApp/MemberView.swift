@@ -52,6 +52,7 @@ struct MemberView: View {
             .inspectorToggle($showInspector)
             .inspector(isPresented: $showInspector) {
                 MemberInspector(member: member, selection: $selection)
+                    .inspectorClose($showInspector)
                     .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
             }
         } else {
@@ -313,6 +314,9 @@ private struct IMessageConversation: View {
         .padding(.vertical, 5)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.quaternary))
+        .contentShape(Capsule())
+        .onTapGesture { NotificationCenter.default.post(name: .tavernToggleInspector, object: nil) }
+        .help("Show or hide \(member.name)'s panel")
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }

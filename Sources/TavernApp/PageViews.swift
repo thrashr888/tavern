@@ -574,34 +574,62 @@ struct AgentThreadView: View {
         .inspector(isPresented: $showInspector) {
             if let agent {
                 AgentInspectorView(agent: agent)
+                    .inspectorClose($showInspector)
                     .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
             }
         }
     }
 }
 
-/// The right panel's button, floating at the page's top right edge, next to the panel it opens.
+/// The right panel's open button, in the window's top right corner while the panel is closed.
+/// (The page's header pill opens it too; the open panel closes with its own X.)
 private struct InspectorToggle: ViewModifier {
     @Binding var isPresented: Bool
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .topTrailing) {
-            Button { isPresented.toggle() } label: {
-                Image(systemName: "sidebar.right").font(.system(size: 14, weight: .medium))
-                    .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
+            if !isPresented {
+                CornerButton(systemImage: "sidebar.right", help: "Show the info panel") { isPresented = true }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(isPresented ? Color.accentColor : Color.secondary)
-            .help(isPresented ? "Hide the info panel" : "Show the info panel")
-            .padding(.top, 8)
-            .padding(.trailing, 10)
         }
+    }
+}
+
+/// The open panel's X, in its top right corner.
+private struct InspectorClose: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .topTrailing) {
+            CornerButton(systemImage: "xmark", help: "Hide the info panel") { isPresented = false }
+        }
+    }
+}
+
+/// A small icon button on the title bar's line, flush in the top right corner.
+private struct CornerButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage).font(.system(size: 13, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+        .padding(.top, 2)
+        .padding(.trailing, 6)
+        .ignoresSafeArea(edges: .top)
     }
 }
 
 extension View {
     func inspectorToggle(_ isPresented: Binding<Bool>) -> some View { modifier(InspectorToggle(isPresented: isPresented)) }
+    func inspectorClose(_ isPresented: Binding<Bool>) -> some View { modifier(InspectorClose(isPresented: isPresented)) }
 }
 
 extension View {
