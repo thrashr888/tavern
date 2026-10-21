@@ -193,13 +193,19 @@ public final class EventStore {
         try events(where: "source = ?", source)
     }
 
-    private func events(where condition: String, _ value: String) throws -> [TavernEvent] {
+    /// Events from one source since a time, oldest first, for the Dashboard's stats.
+    public func events(source: String, since: Date) throws -> [TavernEvent] {
+        try events(where: "source = ? AND source_ts >= ?", source, since: since)
+    }
+
+    private func events(where condition: String, _ value: String, since: Date? = nil) throws -> [TavernEvent] {
         let stmt = try prepare("""
             SELECT source, source_id, thread_key, author_agent, source_ts, received_ts, kind, payload
             FROM events WHERE \(condition) ORDER BY source_ts, id;
             """)
         defer { sqlite3_finalize(stmt) }
         bind(stmt, 1, value)
+        if let since { sqlite3_bind_double(stmt, 2, since.timeIntervalSince1970) }
         var result: [TavernEvent] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             result.append(TavernEvent(

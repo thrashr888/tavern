@@ -71,6 +71,9 @@ public struct PiHeartbeat: Equatable, Sendable {
     public var everyMinutes: Int
     public var last: Date?
     public var next: Date?
+    /// The host's checks this week: beats that woke the agent, and quiet ones that cost nothing.
+    public var wokeThisWeek: Int?
+    public var quietThisWeek: Int?
 
     public init(everyMinutes: Int, last: Date? = nil, next: Date? = nil) {
         self.everyMinutes = everyMinutes
@@ -82,6 +85,10 @@ public struct PiHeartbeat: Equatable, Sendable {
         guard let minutes = json?["everyMinutes"]?.doubleValue, minutes > 0 else { return nil }
         self.init(everyMinutes: Int(minutes), last: PiEntries.parseTimestamp(json?["last"]?.stringValue),
                   next: PiEntries.parseTimestamp(json?["next"]?.stringValue))
+        if let week = json?["checks"]?["week"] {
+            wokeThisWeek = week["woke"]?.doubleValue.map(Int.init)
+            quietThisWeek = week["quiet"]?.doubleValue.map(Int.init)
+        }
     }
 
     /// "Every 30 min · next 4:30 PM".
