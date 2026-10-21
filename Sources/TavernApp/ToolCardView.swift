@@ -75,17 +75,21 @@ private struct CardWebView: NSViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = view
-        context.coordinator.theme = Self.theme(colorScheme, view)
+        context.coordinator.theme = Self.theme(colorScheme, view, server: card.server)
         view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        context.coordinator.setTheme(Self.theme(colorScheme, view))
+        context.coordinator.setTheme(Self.theme(colorScheme, view, server: card.server))
     }
 
     /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's.
-    static func theme(_ scheme: ColorScheme, _ view: NSView) -> String {
+    /// pi-bundle's cards server has Parchment and Hearth palettes, so it gets the party theme's
+    /// name; other servers' cards only know "light" and "dark".
+    static func theme(_ scheme: ColorScheme, _ view: NSView, server: String) -> String {
+        let theme = Theme.current
+        if server == "cards", theme.palette != nil { return theme.rawValue }
         let appearance = view.window?.effectiveAppearance ?? NSApp.effectiveAppearance
         return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
     }
