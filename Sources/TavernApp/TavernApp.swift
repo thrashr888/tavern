@@ -25,11 +25,13 @@ struct TavernApp: App {
                 .environmentObject(modifiers)
                 .onAppear { modifiers.start() }
                 .frame(minWidth: 960, minHeight: 600)
+                .themed()
         }
         // No toolbar or title: the highlighted sidebar row says where you are.
         .windowStyle(.hiddenTitleBar)
         .commands {
             TextSizeCommands()
+            ThemeCommands()
             SearchCommands()
             GoCommands(model: model)
             AppCommands(model: model)
@@ -39,6 +41,7 @@ struct TavernApp: App {
         // Tavern > Settings… (⌘,): the party, its members and lore, saved to roster.json.
         Settings {
             SettingsView()
+                .themed()
                 .environmentObject(model)
         }
     }

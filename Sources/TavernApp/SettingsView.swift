@@ -42,6 +42,7 @@ private struct PartySettings: View {
 
     var body: some View {
         Form {
+            Section("Appearance") { ThemePicker() }
             Section {
                 TextField("Party name", text: optional(\.partyName), prompt: Text("Party"))
                 TextField("Your name", text: optional(\.ownerName), prompt: Text("me"))

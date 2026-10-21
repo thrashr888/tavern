@@ -7,12 +7,14 @@ struct RootView: View {
     /// Last open page, by stable Tavern id. Restored at launch (Dashboard on first launch).
     @SceneStorage("tavern.page") private var pageKey: String = ""
     @AppStorage(TextScale.storageKey) private var textScale = TextScale.standard
+    @AppStorage(Theme.storageKey) private var theme = Theme.standard
     @State private var selection: Page?
     @State private var searching = false
 
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $selection)
+                .sepiaSidebar(theme)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
         } detail: {
             switch selection ?? .dashboard {
