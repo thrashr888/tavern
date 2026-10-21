@@ -597,8 +597,68 @@ struct StepList: View {
                 }
                 .tavernFont(.callout)
                 .padding(.vertical, 5)
+                if let change = step.change { ChangeView(change: change).padding(.leading, 32).padding(.bottom, 4) }
             }
         }
+    }
+}
+
+/// An edit's diff or a write's new file, collapsed to "+12 −3" until opened.
+struct ChangeView: View {
+    let change: StepChange
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").imageScale(.small)
+                    if change.isNewContent { Text("New file · \(change.added) lines") }
+                    else {
+                        Text("+\(change.added)").foregroundStyle(.green)
+                        Text("−\(change.removed)").foregroundStyle(.red)
+                    }
+                }
+                .tavernFont(.caption, weight: .medium)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(change.lines.enumerated()), id: \.offset) { _, line in
+                            HStack(spacing: 8) {
+                                Text(line.number).foregroundStyle(.tertiary).frame(minWidth: 28, alignment: .trailing)
+                                Text(symbol(line.mark)).foregroundStyle(color(line.mark))
+                                Text(line.text.isEmpty ? " " : line.text).foregroundStyle(line.mark == .gap ? .secondary : .primary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(color(line.mark).opacity(line.mark == .added || line.mark == .removed ? 0.12 : 0))
+                        }
+                        if change.omitted > 0 {
+                            Text("\(change.omitted) more lines").foregroundStyle(.secondary).padding(8)
+                        }
+                    }
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(.vertical, 6)
+                }
+                .frame(maxHeight: 320)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+            }
+        }
+    }
+
+    private func symbol(_ mark: StepChange.Line.Mark) -> String {
+        switch mark { case .added: "+"; case .removed: "−"; case .context, .gap: " " }
+    }
+
+    private func color(_ mark: StepChange.Line.Mark) -> Color {
+        switch mark { case .added: .green; case .removed: .red; case .context, .gap: .secondary }
     }
 }
 

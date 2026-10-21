@@ -75,6 +75,8 @@ public struct TranscriptItem: Equatable, Identifiable, Sendable {
     public var failed: Bool
     /// For `.tool` items: an MCP Apps card to show with the result.
     public var card: ToolCard?
+    /// For an edit's result: Pi's display diff (`details.diff`).
+    public var diff: String?
 
     public init(id: String, role: Role, text: String, thinking: String = "", date: Date,
                 toolCalls: [PiToolCall] = [], toolCallID: String? = nil, toolName: String? = nil, failed: Bool = false) {
@@ -131,6 +133,7 @@ public struct TranscriptItem: Equatable, Identifiable, Sendable {
                 toolCallID = message?["toolCallId"]?.stringValue
                 text = failed ? "\(name) failed" : "Ran \(name)"
                 card = failed ? nil : ToolCard(details: message?["details"], toolName: name)
+                diff = failed ? nil : message?["details"]?["diff"]?.stringValue
             default:
                 return nil
             }
