@@ -38,11 +38,9 @@ private struct MailFeedView: View {
 
     var body: some View {
         switch feed.state {
-        // Mail already stored stays readable while Gmail is unset or signed out.
-        case .notConfigured where feed.threads.isEmpty:
-            MailSetupNote()
+        // Mail already stored stays readable while signed out.
         case .signedOut where feed.threads.isEmpty, .signingIn where feed.threads.isEmpty:
-            connectPrompt
+            ProxySignInPrompt(purpose: "to read \(model.roster.party) threads")
         default:
             HStack(spacing: 0) {
                 threadList.frame(width: 340)
@@ -134,40 +132,6 @@ private struct MailFeedView: View {
         guard let date = feed.lastSync else { return "Not synced yet" }
         return "Synced \(date.formatted(date: .omitted, time: .shortened))"
     }
-
-    private var connectPrompt: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "envelope.badge").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text("Connect Gmail to read \(model.roster.party) threads").tavernFont(.title3, weight: .semibold)
-            Text("Reads mail labelled \(model.roster.mailLabelName), and archives a thread when you ask. Tavern never sends or deletes mail.")
-                .foregroundStyle(.secondary)
-            Button(feed.state == .signingIn ? "Waiting for Google…" : "Connect Gmail") {
-                Task { await feed.signIn { url in Task { @MainActor in NSWorkspace.shared.open(url) } } }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(feed.state == .signingIn)
-        }
-        .frame(maxWidth: 440)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Shown until an OAuth client file exists on this Mac.
-private struct MailSetupNote: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Gmail isn't set up on this Mac").tavernFont(.title3, weight: .semibold)
-            Text("Tavern reads labelled mail with a desktop OAuth client from your own Google Cloud project (Gmail read-only scope). Save its downloaded JSON as:")
-                .foregroundStyle(.secondary)
-            Text("~/Library/Application Support/Tavern/gmail-oauth-client.json")
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-            Text("Then reopen this page and choose Connect Gmail.").foregroundStyle(.secondary)
-        }
-        .padding(28)
-        .frame(maxWidth: 560)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
 }
 
 private struct ThreadRow: View {
@@ -226,10 +190,10 @@ private struct ThreadReader: View {
                     HStack {
                         Label(error, systemImage: "exclamationmark.triangle").tavernFont(.caption).foregroundStyle(.orange)
                         Spacer()
-                        Button("Reconnect Gmail") {
+                        Button("Sign In Again") {
                             Task {
                                 await feed.signOut()
-                                await feed.signIn { NSWorkspace.shared.open($0) }
+                                await feed.signIn { url in Task { @MainActor in NSWorkspace.shared.open(url) } }
                             }
                         }
                         .buttonStyle(PillButtonStyle())

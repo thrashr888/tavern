@@ -3,9 +3,8 @@ import XCTest
 
 final class SearchTests: XCTestCase {
     private func mail(_ id: String, subject: String, body: String) -> TavernEvent {
-        let message = GmailMessage(id: id, threadID: "t-\(id)", historyID: nil, internalDate: Date(timeIntervalSince1970: 1_760_500_000),
-                                   subject: subject, from: "Rook <rook@mail.instinct.example>", messageIDHeader: nil,
-                                   snippet: body, body: body)
+        let message = GmailMessage(id: id, threadID: "t-\(id)", internalDate: Date(timeIntervalSince1970: 1_760_500_000),
+                                   subject: subject, from: "Rook <rook@mail.instinct.example>", snippet: body, body: body)
         return MailItem.event(for: message, roster: .fixture)
     }
 

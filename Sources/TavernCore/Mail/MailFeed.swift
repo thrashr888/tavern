@@ -1,12 +1,11 @@
 import Foundation
 
-/// The read-only party mail feed the Mail page shows: signs in, polls, and lists threads from the
-/// event log. Never sends, labels, archives or deletes mail.
+/// The party mail feed the Mail page shows: signs in to Personal Agent Proxy, polls, and lists
+/// threads from the event log. Never sends, labels or deletes mail; archives a thread only when
+/// the user asks.
 @MainActor
 public final class MailFeed: ObservableObject {
     public enum State: Equatable {
-        /// No OAuth client file on this Mac yet (the user creates the client; plan 5.3).
-        case notConfigured
         case signedOut
         case signingIn
         case syncing
@@ -23,36 +22,31 @@ public final class MailFeed: ObservableObject {
     public var pollInterval: Duration = .seconds(90)
 
     private let store: EventStore
-    private let oauth: GmailOAuth?
-    private let makeSync: @MainActor () -> GmailSync?
+    private let oauth: PAPOAuth?
+    private let makeSync: @MainActor () -> PAPMailSync?
     private var polling: Task<Void, Never>?
 
-    /// `makeSync` builds the syncer once signed in; tests pass one over a fake `GmailHTTP`.
-    public init(store: EventStore, oauth: GmailOAuth?, signedIn: Bool, makeSync: @escaping @MainActor () -> GmailSync?) {
+    /// `makeSync` builds the syncer; tests pass one over a fake `PAPHTTP`.
+    public init(store: EventStore, oauth: PAPOAuth?, signedIn: Bool, makeSync: @escaping @MainActor () -> PAPMailSync?) {
         self.store = store
         self.oauth = oauth
         self.makeSync = makeSync
-        state = oauth == nil ? .notConfigured : (signedIn ? .ready : .signedOut)
+        state = signedIn ? .ready : .signedOut
         reload()
     }
 
-    /// Wires the real Gmail API with the client file and Keychain token on this Mac. Each sync
-    /// reads `roster()` for authors and projects; the label stays the one Tavern opened with.
-    public static func live(store: EventStore, roster current: @escaping @MainActor () -> Roster) async -> MailFeed {
+    /// Wires mail through Personal Agent Proxy with Tavern's sign-in. Each sync reads `roster()`
+    /// for authors and projects; the label stays the one Tavern opened with.
+    public static func live(store: EventStore, oauth: PAPOAuth, client: PAPClient, roster current: @escaping @MainActor () -> Roster) async -> MailFeed {
         let roster = current()
         MailItem.reattribute(store: store, roster: roster)
-        guard let client = GmailOAuth.Client.load() else {
-            return MailFeed(store: store, oauth: nil, signedIn: false) { nil }
-        }
-        let oauth = GmailOAuth(client: client)
         let signedIn = await oauth.isSignedIn
         return MailFeed(store: store, oauth: oauth, signedIn: signedIn) {
-            let http = GmailURLSessionHTTP { try await oauth.token() }
-            return GmailSync(api: GmailAPI(http: http), store: store, roster: current(), labelName: roster.mailLabelName)
+            PAPMailSync(client: client, store: store, roster: current(), labelName: roster.mailLabelName)
         }
     }
 
-    /// Why the last archive failed, if it did ("reconnect Gmail" when the token predates archiving).
+    /// Why the last archive failed, if it did (PAP doesn't allow it, or the sign-in lapsed).
     @Published public private(set) var archiveError: String?
     /// Threads archived from Tavern since launch, hidden even before the next sync confirms it.
     @Published public private(set) var archivedHere: Set<String> = []
@@ -65,8 +59,11 @@ public final class MailFeed: ObservableObject {
             inboxThreads?.remove(thread.threadID)
             archivedHere.insert(thread.threadID)
             archiveError = nil
-        } catch GmailError.notAuthorized {
-            archiveError = "Gmail didn't allow archiving. Disconnect and connect Gmail again to grant it."
+        } catch let error as PAPError where error.isForbidden {
+            archiveError = "Personal Agent Proxy doesn't let Tavern archive. Allow Archive for Tavern's Gmail there."
+        } catch PAPError.notAuthorized {
+            state = .signedOut
+            archiveError = "Sign in to Personal Agent Proxy again to archive."
         } catch {
             archiveError = "Couldn't archive: \(error)"
         }
@@ -111,10 +108,8 @@ public final class MailFeed: ObservableObject {
             inboxThreads = (try? await sync.inboxThreads()) ?? inboxThreads
             lastSync = Date()
             state = .ready
-        } catch GmailError.notAuthorized {
+        } catch PAPError.notAuthorized {
             state = .signedOut
-        } catch GmailError.labelNotFound(let name) {
-            state = .failed("No Gmail label named \(name)")
         } catch {
             state = .failed(String(describing: error))
         }
@@ -123,7 +118,7 @@ public final class MailFeed: ObservableObject {
 
     /// Polls until signed out. Safe to call again.
     public func startPolling() {
-        guard polling == nil, state != .notConfigured, state != .signedOut else { return }
+        guard polling == nil, state != .signedOut else { return }
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }

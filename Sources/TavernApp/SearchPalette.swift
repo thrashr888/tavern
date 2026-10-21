@@ -132,7 +132,7 @@ struct SearchPalette: View {
         guard !Task.isCancelled else { return }
         guard let source = model.linear else {
             linear = []
-            linearError = "Linear: no key at ~/.config/linear-key"
+            linearError = "Linear: no team key in Settings"
             return
         }
         do {

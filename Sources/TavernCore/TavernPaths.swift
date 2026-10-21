@@ -2,7 +2,7 @@ import Foundation
 
 /// Where Tavern keeps its files: ~/Library/Application Support/Tavern, or `TAVERN_HOME` for a
 /// separate party (a demo, screenshots) that must not touch the real one: its own roster, event
-/// store, art and Linear key, no Gmail sign-in, and no notifications.
+/// store and art, its own Personal Agent Proxy sign-in, and no notifications.
 public enum TavernPaths {
     public static var separateHome: URL? {
         guard let home = ProcessInfo.processInfo.environment["TAVERN_HOME"], !home.isEmpty else { return nil }
