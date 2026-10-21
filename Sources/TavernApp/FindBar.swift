@@ -32,7 +32,7 @@ struct FindBar: View {
                 .buttonStyle(.plain).disabled(matchCount == 0).help("Previous match, older (⇧⌘G or Return)")
             Button { step(1) } label: { Image(systemName: "chevron.down") }
                 .buttonStyle(.plain).disabled(matchCount == 0).help("Next match, newer (⌘G)")
-            Button("Done", action: close).buttonStyle(.plain).foregroundStyle(Color.accentColor)
+            Button("Done", action: close).buttonStyle(.plain).foregroundStyle(Color.tavernAccent)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

@@ -333,7 +333,7 @@ private struct IMessageConversation: View {
                         .textSelection(.enabled)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(message.fromMe ? AnyShapeStyle(Color.accentColor.opacity(0.85)) : AnyShapeStyle(.quaternary.opacity(0.7)),
+                        .background(message.fromMe ? AnyShapeStyle(Color.tavernAccent.opacity(0.85)) : AnyShapeStyle(.quaternary.opacity(0.7)),
                                     in: RoundedRectangle(cornerRadius: 16))
                         .foregroundStyle(message.fromMe ? Color.white : Color.primary)
                 }
@@ -375,14 +375,14 @@ private struct IMessageConversation: View {
                 .padding(12)
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(
-                    dropTargeted ? Color.accentColor : (focused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25)),
+                    dropTargeted ? Color.tavernAccent : (focused ? Color.tavernAccent.opacity(0.5) : Color.secondary.opacity(0.25)),
                     lineWidth: dropTargeted ? 2 : 1))
                 .acceptsImageDrops(into: $images, targeted: $dropTargeted)
                 .onPasteCommand(of: [.image, .fileURL]) { _ in images += DraftImage.fromPasteboard() }
                 Button(action: send) {
                     Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 32, height: 32)
-                        .background(canSend ? Color.accentColor : Color.secondary.opacity(0.4), in: Circle())
+                        .background(canSend ? Color.tavernAccent : Color.secondary.opacity(0.4), in: Circle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: .command)

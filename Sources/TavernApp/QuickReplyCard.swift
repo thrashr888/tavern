@@ -384,7 +384,7 @@ private struct ReplyBox: View {
                     .onSubmit(submit)
                 Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(canSend ? Color.tavernAccent : Color.secondary)
                     .disabled(!canSend)
                     .help("Send")
             }

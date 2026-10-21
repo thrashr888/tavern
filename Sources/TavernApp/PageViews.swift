@@ -355,7 +355,7 @@ private struct SetupBanner: View {
             }
         }
         .padding(model.hasRosterFile && model.discovered.isEmpty ? 0 : 14)
-        .background(model.hasRosterFile && model.discovered.isEmpty ? Color.clear : Color.accentColor.opacity(0.08),
+        .background(model.hasRosterFile && model.discovered.isEmpty ? Color.clear : Color.tavernAccent.opacity(0.08),
                     in: RoundedRectangle(cornerRadius: 12))
         .task { if model.discovered.isEmpty { await model.discoverAgents() } }
     }

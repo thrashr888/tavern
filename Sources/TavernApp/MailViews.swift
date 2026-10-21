@@ -276,7 +276,7 @@ struct ListToggle: View {
     var body: some View {
         Button { isOn.toggle() } label: { Image(systemName: systemImage) }
             .buttonStyle(.plain)
-            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+            .foregroundStyle(isOn ? Color.tavernAccent : Color.secondary)
             .help(help)
     }
 }

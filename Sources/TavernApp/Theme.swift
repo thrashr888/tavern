@@ -1,10 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Tavern's look: follow the system, light, dark (the default), or sepia, a parchment-and-wood
-/// light theme for the party.
+/// Tavern's look: follow the system, light, dark (the default), or one of the party's own:
+/// Parchment (a scroll, light) and Hearth (burnt umber and dark oak by candlelight).
 enum Theme: String, CaseIterable, Identifiable {
-    case system, light, dark, sepia
+    case system, light, dark, parchment, hearth
 
     static let storageKey = "tavern.theme"
     static let standard = Theme.dark
@@ -16,7 +16,8 @@ enum Theme: String, CaseIterable, Identifiable {
         case .system: "System"
         case .light: "Light"
         case .dark: "Dark"
-        case .sepia: "Sepia"
+        case .parchment: "Parchment"
+        case .hearth: "Hearth"
         }
     }
 
@@ -25,20 +26,34 @@ enum Theme: String, CaseIterable, Identifiable {
         case .system: "circle.lefthalf.filled"
         case .light: "sun.max"
         case .dark: "moon"
-        case .sepia: "scroll"
+        case .parchment: "scroll"
+        case .hearth: "flame"
         }
     }
 
-    /// Sepia is drawn on the light appearance, so controls, cards and code stay legible.
+    /// The party themes sit on the matching system appearance, so controls, cards and code
+    /// stay legible.
     var appearance: NSAppearance? {
         switch self {
         case .system: nil
-        case .light, .sepia: NSAppearance(named: .aqua)
-        case .dark: NSAppearance(named: .darkAqua)
+        case .light, .parchment: NSAppearance(named: .aqua)
+        case .dark, .hearth: NSAppearance(named: .darkAqua)
         }
     }
 
-    static var current: Theme { Theme(rawValue: UserDefaults.standard.string(forKey: storageKey) ?? "") ?? standard }
+    var palette: ThemePalette? {
+        switch self {
+        case .parchment: .parchment
+        case .hearth: .hearth
+        default: nil
+        }
+    }
+
+    /// The stored theme; "sepia" was Parchment's first name.
+    static var current: Theme {
+        let raw = UserDefaults.standard.string(forKey: storageKey) ?? ""
+        return Theme(rawValue: raw == "sepia" ? "parchment" : raw) ?? standard
+    }
 
     /// Applies the appearance to every window, sheet and panel.
     static func apply(_ theme: Theme) {
@@ -46,43 +61,65 @@ enum Theme: String, CaseIterable, Identifiable {
     }
 }
 
-/// Sepia's palette: parchment pages, a darker scroll for the sidebar, ink text and leather accents.
-enum Sepia {
-    static let paper = Color(red: 0.953, green: 0.910, blue: 0.812)
-    static let panel = Color(red: 0.918, green: 0.859, blue: 0.733)
-    static let sidebar = Color(red: 0.882, green: 0.812, blue: 0.659)
-    static let ink = Color(red: 0.231, green: 0.165, blue: 0.102)
-    static let accent = Color(red: 0.545, green: 0.290, blue: 0.110)
+/// A party theme's colors: page, panels, the sidebar, text and the accent.
+struct ThemePalette {
+    var page: Color
+    var sidebar: Color
+    var ink: Color
+    var accent: Color
+
+    static let parchment = ThemePalette(
+        page: Color(red: 0.953, green: 0.910, blue: 0.812),
+        sidebar: Color(red: 0.882, green: 0.812, blue: 0.659),
+        ink: Color(red: 0.231, green: 0.165, blue: 0.102),
+        accent: Color(red: 0.545, green: 0.290, blue: 0.110))
+    static let hearth = ThemePalette(
+        page: Color(red: 0.165, green: 0.118, blue: 0.086),
+        sidebar: Color(red: 0.118, green: 0.082, blue: 0.059),
+        ink: Color(red: 0.933, green: 0.878, blue: 0.784),
+        accent: Color(red: 0.882, green: 0.588, blue: 0.247))
 }
 
-/// The theme on a window's content: its appearance, and for sepia the paper, ink and accent.
+extension Color {
+    /// The theme's accent (leather or candlelight), else the system's.
+    static var tavernAccent: Color { Theme.current.palette?.accent ?? .accentColor }
+}
+
+/// The theme on a window's content: its appearance, and for a party theme the page, ink and
+/// accent. Changing the theme redraws the window.
 struct ThemedContent: ViewModifier {
-    @AppStorage(Theme.storageKey) private var theme = Theme.standard
+    @AppStorage(Theme.storageKey) private var stored = Theme.standard.rawValue
 
     func body(content: Content) -> some View {
+        let theme = Theme.current
         Group {
-            if theme == .sepia {
+            if let palette = theme.palette {
                 content
-                    .backgroundStyle(Sepia.paper)
-                    .foregroundStyle(Sepia.ink)
-                    .tint(Sepia.accent)
-                    .background(Sepia.paper)
+                    .backgroundStyle(palette.page)
+                    .foregroundStyle(palette.ink)
+                    .tint(palette.accent)
+                    .scrollContentBackground(.hidden)
+                    .background(palette.page)
             } else {
                 content
             }
         }
-        .onAppear { Theme.apply(theme) }
-        .onChange(of: theme) { _, new in Theme.apply(new) }
+        .id(stored)
+        .onAppear {
+            if stored == "sepia" { stored = Theme.parchment.rawValue }
+            Theme.apply(Theme.current)
+        }
+        .onChange(of: stored) { _, _ in Theme.apply(Theme.current) }
     }
 }
 
 extension View {
     func themed() -> some View { modifier(ThemedContent()) }
 
-    /// The sidebar's own scroll color in sepia; the system sidebar otherwise.
-    @ViewBuilder func sepiaSidebar(_ theme: Theme) -> some View {
-        if theme == .sepia {
-            self.scrollContentBackground(.hidden).background(Sepia.sidebar)
+    /// The sidebar's own darker color in a party theme; the system sidebar otherwise.
+    @ViewBuilder func themedSidebar(_ theme: Theme) -> some View {
+        if let palette = theme.palette {
+            self.scrollContentBackground(.hidden).background(palette.sidebar)
         } else {
             self
         }

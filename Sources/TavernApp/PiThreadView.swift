@@ -209,7 +209,7 @@ struct PiThreadView: View {
                         RoundButton(systemImage: "stop.fill", tint: .red) { Task { await session.abort() } }
                             .help("Abort the turn")
                     } else {
-                        RoundButton(systemImage: "arrow.up", tint: .accentColor, action: submitDefault)
+                        RoundButton(systemImage: "arrow.up", tint: .tavernAccent, action: submitDefault)
                             .keyboardShortcut(.return, modifiers: .command)
                             .disabled(draftIsEmpty)
                             .help("Send (Return)")
@@ -219,7 +219,7 @@ struct PiThreadView: View {
             .padding(12)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(
-                dropTargeted ? Color.accentColor : (composerFocused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25)),
+                dropTargeted ? Color.tavernAccent : (composerFocused ? Color.tavernAccent.opacity(0.5) : Color.secondary.opacity(0.25)),
                 lineWidth: dropTargeted ? 2 : 1))
             .acceptsImageDrops(into: $images, targeted: $dropTargeted)
             .onPasteCommand(of: [.image, .fileURL]) { _ in images += DraftImage.fromPasteboard() }
@@ -399,7 +399,7 @@ extension TranscriptRow {
             .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
+            .background(Color.tavernAccent.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
     }
 
     /// Inline Markdown (bold, italics, code, links) with line breaks kept; plain text if it won't parse.
