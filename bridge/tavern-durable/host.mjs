@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Approvals, approvalExtension } from "./approvals.mjs";
+import { ASK_PREFIX, askExtension } from "./ask.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, loadChecks, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -41,7 +42,8 @@ const runtimePath = process.env.TAVERN_DURABLE_RUNTIME ?? path.join(PI_REPO, "pa
 const runtime = await import(pathToFileURL(runtimePath).href);
 const clients = new Set();
 // The oldest open question goes to every client as a confirm dialog (Tavern shows one at a time).
-const approvals = new Approvals((dialog) => dialog && broadcast(confirmRequest(dialog)));
+// The ask tool's select and input dialogs share the queue.
+const approvals = new Approvals((dialog) => dialog && broadcast(dialogRequest(dialog)));
 // MCP servers from <AGENT_CWD>/.pi/mcp.json become agent tools; their changes ask like risky shell.
 const mcpServers = await startServers({ cwd: AGENT_CWD, file: process.env.TAVERN_DURABLE_MCP, log });
 const mcp = mcpExtension(mcpServers);
@@ -49,7 +51,7 @@ const mcp = mcpExtension(mcpServers);
 // the user has, so they don't ask. Its run (and send_feedback) still do.
 const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
 const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name)).map((tool) => tool.name));
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), mcp];
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), askExtension(approvals), mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
   if (!/No durable session exists/.test(String(error?.message))) throw error;
@@ -102,7 +104,7 @@ const server = net.createServer((socket) => {
   });
   // A client that (re)connects while a tool waits sees the question again.
   const open = approvals.current();
-  if (open) send(socket, confirmRequest(open));
+  if (open) send(socket, dialogRequest(open));
   socket.on("close", () => clients.delete(socket));
   socket.on("error", () => clients.delete(socket));
 });
@@ -182,10 +184,13 @@ async function handle(socket, line) {
       case "compact":
         background(controller.compact(command.customInstructions));
         return reply(true);
-      case "extension_ui_response":
-        // Approval answers; notices need none. Cancel counts as no.
-        approvals.answer(String(command.id ?? ""), command.confirmed === true);
+      case "extension_ui_response": {
+        // Approval answers (cancel counts as no) and ask answers; notices need none.
+        const id = String(command.id ?? "");
+        if (id.startsWith(ASK_PREFIX)) approvals.reply(id, typeof command.value === "string" ? { value: command.value } : { cancelled: true });
+        else approvals.answer(id, command.confirmed === true);
         return;
+      }
       default:
         // No new-session or switch-session commands, by design: one session per agent.
         return reply(false, undefined, `unsupported command ${command.type}`);
@@ -262,8 +267,9 @@ function background(promise) {
   );
 }
 
-function confirmRequest(dialog) {
-  return { type: "extension_ui_request", id: dialog.id, method: "confirm", title: dialog.title, message: dialog.message };
+function dialogRequest(dialog) {
+  const { id, method = "confirm", title, message, options, placeholder } = dialog;
+  return { type: "extension_ui_request", id, method, title, message, ...(options ? { options } : {}), ...(placeholder ? { placeholder } : {}) };
 }
 
 function send(socket, record) {
