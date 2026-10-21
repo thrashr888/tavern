@@ -127,46 +127,85 @@ private struct QuickCardModifier: ViewModifier {
     }
 }
 
-/// An NSPopover that doesn't close on, or swallow, clicks outside it (SwiftUI's `.popover` is
-/// transient: the first click outside only dismisses it).
+/// The card's window: a borderless panel beside the row, attached to the main window. Unlike a
+/// popover it doesn't take keyboard focus when it appears (so the sidebar keeps tracking the
+/// pointer, and hovering the next row or leaving still works), it doesn't swallow clicks outside
+/// it, and it becomes key only when you click into its message box.
 private struct NonModalPopover<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     @ViewBuilder let content: () -> Content
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        let popover = context.coordinator.popover
-        if isPresented {
-            if let host = popover.contentViewController as? NSHostingController<Content> {
-                host.rootView = content()
-            } else {
-                let host = NSHostingController(rootView: content())
-                host.sizingOptions = .preferredContentSize
-                popover.contentViewController = host
-            }
-            if !popover.isShown, view.window != nil {
-                popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxX)
-            }
-        } else if popover.isShown {
-            popover.performClose(nil)
+    func updateNSView(_ anchor: NSView, context: Context) {
+        let coordinator = context.coordinator
+        if isPresented, let window = anchor.window {
+            coordinator.show(content(), beside: anchor, in: window)
+        } else {
+            coordinator.hide()
         }
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
-        coordinator.popover.close()
+        coordinator.hide()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator {
-        let popover: NSPopover = {
-            let popover = NSPopover()
-            popover.behavior = .applicationDefined
-            popover.animates = false
-            return popover
-        }()
+        private var panel: NSPanel?
+        private var host: NSHostingController<AnyView>?
+
+        func show(_ content: Content, beside anchor: NSView, in window: NSWindow) {
+            let root = AnyView(
+                content
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            )
+            let panel = self.panel ?? makePanel()
+            if let host { host.rootView = root } else {
+                // The panel follows the card's size as its content loads.
+                let host = NSHostingController(rootView: root)
+                host.sizingOptions = .preferredContentSize
+                panel.contentViewController = host
+                self.host = host
+            }
+            let size = host?.view.fittingSize ?? NSSize(width: 360, height: 200)
+            let row = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+            var origin = NSPoint(x: row.maxX + 8, y: row.maxY - size.height)
+            if let screen = window.screen?.visibleFrame {
+                origin.y = max(screen.minY + 8, min(origin.y, screen.maxY - size.height - 8))
+            }
+            panel.setFrame(NSRect(origin: origin, size: size), display: true)
+            if panel.parent == nil { window.addChildWindow(panel, ordered: .above) }
+            panel.orderFront(nil)
+        }
+
+        func hide() {
+            guard let panel else { return }
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+
+        private func makePanel() -> NSPanel {
+            let panel = CardPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+            panel.becomesKeyOnlyIfNeeded = true
+            panel.isFloatingPanel = true
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = true
+            panel.hidesOnDeactivate = true
+            self.panel = panel
+            return panel
+        }
     }
+}
+
+/// Borderless panels can't become key by default; the card's message box needs to.
+private final class CardPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 struct QuickReplyCard: View {
@@ -343,8 +382,9 @@ private struct ReplyBox: View {
             }
             if let error { Text(error).tavernFont(.caption).foregroundStyle(.orange) }
         }
-        // Typing (the box focused) keeps the card open; a draft left behind doesn't.
-        .onChange(of: focused) { _, now in writing = now }
+        // Typing keeps the card open: the box focused with something in it.
+        .onChange(of: focused) { _, now in writing = now && !draft.isEmpty }
+        .onChange(of: draft) { _, now in writing = focused && !now.isEmpty }
         .onDisappear { writing = false }
     }
 
