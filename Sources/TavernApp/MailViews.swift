@@ -52,21 +52,6 @@ private struct MailFeedView: View {
                 readingPane.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await feed.refresh() } }
-            .toolbar {
-                ToolbarItem {
-                    Toggle(isOn: $showArchived) { Label("Archived", systemImage: "archivebox") }
-                        .help(showArchived ? "Hide threads archived in Gmail" : "Show threads archived in Gmail")
-                }
-                ToolbarItem {
-                    Toggle(isOn: $showHeartbeats) { Label("Heartbeats", systemImage: "waveform.path.ecg") }
-                        .help(showHeartbeats ? "Hide agents' heartbeat mails" : "Show agents' heartbeat mails")
-                }
-                ToolbarItem {
-                    Button { Task { await feed.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                        .disabled(feed.state == .syncing)
-                        .help(lastSyncText)
-                }
-            }
         }
     }
 
@@ -93,6 +78,15 @@ private struct MailFeedView: View {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.tertiary).help("Clear")
                 }
+                Divider().frame(height: 14)
+                ListToggle(isOn: $showArchived, systemImage: "archivebox",
+                           help: showArchived ? "Hide threads archived in Gmail" : "Show threads archived in Gmail")
+                ListToggle(isOn: $showHeartbeats, systemImage: "waveform.path.ecg",
+                           help: showHeartbeats ? "Hide agents' heartbeat mails" : "Show agents' heartbeat mails")
+                Button { Task { await feed.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .disabled(feed.state == .syncing)
+                    .help(lastSyncText)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -270,5 +264,19 @@ private struct MessageCard: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// A small on/off icon in a list's header, tinted while on.
+struct ListToggle: View {
+    @Binding var isOn: Bool
+    let systemImage: String
+    let help: String
+
+    var body: some View {
+        Button { isOn.toggle() } label: { Image(systemName: systemImage) }
+            .buttonStyle(.plain)
+            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+            .help(help)
     }
 }

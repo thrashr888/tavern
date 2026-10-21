@@ -570,24 +570,38 @@ struct AgentThreadView: View {
         .hidingWindowTitle()
         .focusedSceneValue(\.currentAgent, model.session(for: agentID))
         .onReceive(NotificationCenter.default.publisher(for: .tavernToggleInspector)) { _ in showInspector.toggle() }
+        .inspectorToggle($showInspector)
         .inspector(isPresented: $showInspector) {
             if let agent {
                 AgentInspectorView(agent: agent)
                     .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
             }
         }
-        .toolbar {
-            // Flush right, next to the panel it opens.
-            ToolbarItemGroup {
-                Spacer()
-                Button {
-                    showInspector.toggle()
-                } label: {
-                    Label("Inspector", systemImage: "sidebar.right")
-                }
+    }
+}
+
+/// The right panel's button, floating at the page's top right edge, next to the panel it opens.
+private struct InspectorToggle: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .topTrailing) {
+            Button { isPresented.toggle() } label: {
+                Image(systemName: "sidebar.right").font(.system(size: 14, weight: .medium))
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(isPresented ? Color.accentColor : Color.secondary)
+            .help(isPresented ? "Hide the info panel" : "Show the info panel")
+            .padding(.top, 8)
+            .padding(.trailing, 10)
         }
     }
+}
+
+extension View {
+    func inspectorToggle(_ isPresented: Binding<Bool>) -> some View { modifier(InspectorToggle(isPresented: isPresented)) }
 }
 
 extension View {

@@ -49,16 +49,10 @@ struct MemberView: View {
             .navigationTitle(member.name)
             .hidingWindowTitle()
             .onReceive(NotificationCenter.default.publisher(for: .tavernToggleInspector)) { _ in showInspector.toggle() }
+            .inspectorToggle($showInspector)
             .inspector(isPresented: $showInspector) {
                 MemberInspector(member: member, selection: $selection)
                     .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
-            }
-            .toolbar {
-                // Flush right, next to the panel it opens.
-                ToolbarItemGroup {
-                    Spacer()
-                    Button { showInspector.toggle() } label: { Label("Inspector", systemImage: "sidebar.right") }
-                }
             }
         } else {
             Text("No party member \(memberID)").foregroundStyle(.secondary)

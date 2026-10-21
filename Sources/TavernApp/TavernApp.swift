@@ -26,7 +26,8 @@ struct TavernApp: App {
                 .onAppear { modifiers.start() }
                 .frame(minWidth: 960, minHeight: 600)
         }
-        .windowToolbarStyle(.unifiedCompact)
+        // No toolbar or title: the highlighted sidebar row says where you are.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             TextSizeCommands()
             SearchCommands()

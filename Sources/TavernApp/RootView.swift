@@ -32,6 +32,7 @@ struct RootView: View {
                 ServicesView()
             }
         }
+        .toolbar(.hidden, for: .windowToolbar)
         .sheet(isPresented: $searching) {
             SearchPalette(selection: $selection)
                 .environmentObject(model)
