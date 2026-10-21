@@ -35,6 +35,8 @@ public struct PiStep: Equatable, Identifiable, Sendable {
     public var started: Date
     public var ended: Date?
     public var failed: Bool
+    /// What an edit or write did to the file, when the result says.
+    public var change: StepChange?
 
     public init(id: String, toolName: String, kind: Kind, title: String, started: Date, ended: Date? = nil, failed: Bool = false) {
         self.id = id
@@ -265,6 +267,9 @@ public enum PiActivity {
                 }
                 step.ended = item.date
                 step.failed = item.failed
+                if !item.failed, let id = item.toolCallID, let issued = calls[id] {
+                    step.change = StepChange(toolName: issued.call.name, arguments: issued.call.arguments, diff: item.diff)
+                }
                 steps.append(step)
                 if var card = item.card {
                     if let id = item.toolCallID, let issued = calls[id] { card.arguments = issued.call.arguments }
@@ -284,5 +289,70 @@ public enum PiActivity {
         }
         flush()
         return rows
+    }
+}
+
+/// The lines an edit changed (from Pi's display diff: "+12 text", "-12 text", " 12 text", and
+/// " ... " for skipped lines), or a written file's new content.
+public struct StepChange: Equatable, Sendable {
+    public struct Line: Equatable, Sendable {
+        public enum Mark: Sendable { case added, removed, context, gap }
+        public var mark: Mark
+        public var number: String
+        public var text: String
+    }
+
+    public var lines: [Line]
+    public var added: Int
+    public var removed: Int
+    /// A whole new file rather than a diff.
+    public var isNewContent: Bool
+    /// Lines left out of a long write.
+    public var omitted: Int
+
+    static let maxLines = 400
+
+    public init?(toolName: String, arguments: JSONValue, diff: String?) {
+        if let diff, !diff.isEmpty {
+            self.init(diff: diff)
+        } else if toolName == "write", let content = arguments["content"]?.stringValue {
+            self.init(written: content)
+        } else {
+            return nil
+        }
+    }
+
+    public init(diff: String) {
+        var lines: [Line] = []
+        for raw in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let first = raw.first else { continue }
+            let rest = raw.dropFirst()
+            let trimmed = rest.drop(while: { $0 == " " })
+            let number = trimmed.prefix(while: \.isNumber)
+            var text = trimmed.dropFirst(number.count)
+            if text.first == " " { text = text.dropFirst() }
+            let mark: Line.Mark
+            switch first {
+            case "+": mark = .added
+            case "-": mark = .removed
+            default: mark = number.isEmpty && text.trimmingCharacters(in: .whitespaces) == "..." ? .gap : .context
+            }
+            lines.append(Line(mark: mark, number: String(number), text: String(text)))
+        }
+        self.lines = Array(lines.prefix(Self.maxLines))
+        added = lines.filter { $0.mark == .added }.count
+        removed = lines.filter { $0.mark == .removed }.count
+        isNewContent = false
+        omitted = max(0, lines.count - Self.maxLines)
+    }
+
+    public init(written content: String) {
+        let all = content.split(separator: "\n", omittingEmptySubsequences: false)
+        let all2 = content.hasSuffix("\n") ? all.dropLast() : all[...]
+        lines = all2.prefix(Self.maxLines).enumerated().map { Line(mark: .added, number: String($0.offset + 1), text: String($0.element)) }
+        added = all2.count
+        removed = 0
+        isNewContent = true
+        omitted = max(0, all2.count - Self.maxLines)
     }
 }

@@ -20,6 +20,7 @@ struct SearchPalette: View {
         var page: Page?
         var mailThread: String?
         var external: URL?
+        var theme: Theme?
     }
 
     @EnvironmentObject private var model: AppModel
@@ -124,7 +125,7 @@ struct SearchPalette: View {
             linearError = nil
             return
         }
-        local = agentResults(text) + storeResults(text)
+        local = themeResults(text) + agentResults(text) + storeResults(text)
         highlighted = results.first?.id
         // Debounce the network part.
         try? await Task.sleep(for: .milliseconds(250))
@@ -145,6 +146,15 @@ struct SearchPalette: View {
             linearError = "Linear: \(error)"
         }
         if highlighted == nil { highlighted = results.first?.id }
+    }
+
+    /// "sepia", "dark", "theme"…: switch the theme from here.
+    private func themeResults(_ text: String) -> [Result] {
+        let needle = text.lowercased().trimmingCharacters(in: .whitespaces)
+        guard needle.count >= 3 else { return [] }
+        return Theme.allCases.filter { "theme \($0.label.lowercased())".contains(needle) || $0.label.lowercased().hasPrefix(needle) }
+            .map { Result(id: "theme:\($0.rawValue)", scope: .all, icon: $0.symbol, title: "\($0.label) theme",
+                          detail: $0 == Theme.current ? "Current theme" : "Switch Tavern's look", theme: $0) }
     }
 
     private func agentResults(_ text: String) -> [Result] {
@@ -198,7 +208,9 @@ struct SearchPalette: View {
 
     private func open(_ result: Result?, external: Bool) {
         guard let result else { return }
-        if external, let url = result.external {
+        if let theme = result.theme {
+            UserDefaults.standard.set(theme.rawValue, forKey: Theme.storageKey)
+        } else if external, let url = result.external {
             NSWorkspace.shared.open(url)
         } else if let page = result.page {
             model.focusedMailThread = result.mailThread

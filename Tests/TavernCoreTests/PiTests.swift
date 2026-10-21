@@ -669,3 +669,21 @@ final class HeartbeatRowTests: XCTestCase {
         XCTAssertEqual(run.reply, "Drafted a reply to Rook.")
     }
 }
+
+final class StepChangeTests: XCTestCase {
+    func testPiDisplayDiffParses() {
+        let change = StepChange(diff: " 11 let a = 1\n-12 let price = 96\n+12 let price = 120\n     ...\n 40 }")
+        XCTAssertEqual(change.added, 1)
+        XCTAssertEqual(change.removed, 1)
+        XCTAssertEqual(change.lines.map(\.mark), [.context, .removed, .added, .gap, .context])
+        XCTAssertEqual(change.lines[2].number, "12")
+        XCTAssertEqual(change.lines[2].text, "let price = 120")
+    }
+
+    func testWriteShowsNewContent() throws {
+        let change = try XCTUnwrap(StepChange(toolName: "write", arguments: ["path": "a.txt", "content": "one\ntwo\n"], diff: nil))
+        XCTAssertTrue(change.isNewContent)
+        XCTAssertEqual(change.lines.map(\.text), ["one", "two"])
+        XCTAssertNil(StepChange(toolName: "bash", arguments: ["command": "ls"], diff: nil))
+    }
+}
