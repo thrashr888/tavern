@@ -66,7 +66,7 @@ struct MemberView: View {
     }
 }
 
-/// Avatar, identity, Write in Gmail, tasks and the latest threads (five at a time).
+/// Avatar, Write in Gmail, tasks, identity and the latest threads (five at a time).
 private struct MemberInspector: View {
     let member: RosterMember
     @Binding var selection: Page?
@@ -92,6 +92,8 @@ private struct MemberInspector: View {
                 }
                 .frame(maxWidth: .infinity)
 
+                AgentTasksSection(agent: member)
+
                 InfoCard(title: "Identity") {
                     InfoRow(label: "Class", value: member.partyClass ?? "–")
                     if let animal = member.animal { InfoRow(label: "Animal", value: animal) }
@@ -102,8 +104,6 @@ private struct MemberInspector: View {
                     }
                     if let summary = member.summary { InfoRow(label: "About", value: summary) }
                 }
-
-                AgentTasksSection(agent: member)
 
                 if member.imessage != nil, let mail = model.mail {
                     MemberThreads(mail: mail, member: member, selection: $selection, pageSize: 5, title: "Recent threads", compact: true)
@@ -134,9 +134,16 @@ private struct MemberThreads: View {
     var compact = false
     @EnvironmentObject private var model: AppModel
     @State private var shown: Int?
+    @State private var query = ""
+    /// Shared with the Mail page: threads archived in Gmail stay hidden unless asked for.
+    @AppStorage("tavern.mail.showArchived") private var showArchived = false
 
     var body: some View {
-        let all = mail.threads.involving(member.id)
+        let involved = mail.threads.involving(member.id).filter { !$0.isHeartbeat }
+        let archived = involved.filter(mail.isArchived).count
+        let all = involved
+            .filter { showArchived || !mail.isArchived($0) }
+            .filter { $0.matches(query, roster: model.roster) }
         let limit = shown ?? pageSize
         let visible = all.prefix(limit)
         VStack(alignment: .leading, spacing: 10) {
@@ -146,8 +153,28 @@ private struct MemberThreads: View {
                 Spacer()
                 if !all.isEmpty { CountBadge(count: all.count) }
             }
-            if all.isEmpty {
+            if !compact, !involved.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search \(member.name)'s threads", text: $query).textFieldStyle(.plain)
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(.tertiary).help("Clear")
+                    }
+                    if archived > 0 {
+                        Toggle(isOn: $showArchived) { Text(showArchived ? "Hide archived" : "Show \(archived) archived") }
+                            .toggleStyle(.button).buttonStyle(PillButtonStyle())
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+            }
+            if involved.isEmpty {
                 Text("\(member.name) hasn't written to the \(model.roster.party) yet.").foregroundStyle(.secondary)
+            } else if all.isEmpty {
+                Text(query.trimmingCharacters(in: .whitespaces).isEmpty ? "Every thread with \(member.name) is archived."
+                     : "No threads match “\(query)”.").foregroundStyle(.secondary)
             }
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
@@ -164,8 +191,13 @@ private struct MemberThreads: View {
                                         .tavernFont(.caption).foregroundStyle(.secondary).fixedSize()
                                 }
                                 if !compact {
-                                    Text(thread.messages.last(where: { $0.author == member.id })?.snippet ?? "")
-                                        .tavernFont(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    HStack(spacing: 4) {
+                                        ForEach(thread.authors.compactMap(model.roster.member(id:))) { author in
+                                            AvatarView(member: author, size: 22)
+                                        }
+                                        Text(thread.messages.last(where: { $0.author == member.id })?.snippet ?? "")
+                                            .tavernFont(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    }
                                 }
                             }
                             .padding(.horizontal, compact ? 10 : 14)
