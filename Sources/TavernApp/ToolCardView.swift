@@ -84,12 +84,9 @@ private struct CardWebView: NSViewRepresentable {
         context.coordinator.setTheme(Self.theme(colorScheme, view, page: page))
     }
 
-    /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's. A card
-    /// whose page names the party theme (it has a Parchment or Hearth palette) gets that name;
-    /// any other card gets "light" or "dark", which it knows.
+    /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's. Cards
+    /// only know light and dark; Parchment and Hearth tint them on Tavern's side.
     static func theme(_ scheme: ColorScheme, _ view: NSView, page: ToolCardPage) -> String {
-        let theme = Theme.current
-        if theme.palette != nil, page.html.range(of: theme.rawValue, options: .caseInsensitive) != nil { return theme.rawValue }
         let appearance = view.window?.effectiveAppearance ?? NSApp.effectiveAppearance
         return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
     }
@@ -130,10 +127,17 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         self.height = height
     }
 
+    /// SEP-1865 style variables for a party theme, so a card that only knows light and dark
+    /// still takes Parchment's or Hearth's colors. Empty otherwise: the card's own palette.
+    static var styles: JSONValue {
+        guard let css = Theme.current.palette?.cardVariables else { return .object([:]) }
+        return ["variables": .object(css.mapValues { .string($0) })]
+    }
+
     func setTheme(_ value: String) {
         guard value != theme else { return }
         theme = value
-        if initialized { notify("ui/notifications/host-context-changed", ["theme": .string(value)]) }
+        if initialized { notify("ui/notifications/host-context-changed", ["theme": .string(value), "styles": Self.styles]) }
     }
 
     // Only the card itself loads; links and redirects never navigate the frame.
@@ -161,6 +165,7 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 "hostCapabilities": ["openLinks": .object([:]), "serverTools": .object([:])],
                 "hostContext": [
                     "theme": .string(theme),
+                    "styles": Self.styles,
                     "displayMode": "inline",
                     "availableDisplayModes": .array(["inline"]),
                     "platform": "desktop",
