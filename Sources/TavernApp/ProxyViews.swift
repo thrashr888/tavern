@@ -1,8 +1,8 @@
 import SwiftUI
 import TavernCore
 
-/// "Sign in to Personal Agent Proxy": the one sign-in that brings in party mail and Linear when
-/// Tavern goes through PAP. Shown on Mail and Goals until it's done, and in Settings.
+/// "Sign in to Personal Agent Proxy": the one sign-in that brings in party mail and Linear.
+/// Shown on Mail and Goals until it's done, and in Settings.
 struct ProxySignInPrompt: View {
     @EnvironmentObject private var model: AppModel
     /// "to read Party threads".
@@ -47,10 +47,9 @@ struct ProxySignInButton: View {
     }
 }
 
-/// Settings > Connections: where mail and Linear come from, and the PAP sign-in.
+/// Settings > Connections: the Personal Agent Proxy sign-in and what Tavern may use there.
 struct ProxySettings: View {
     @EnvironmentObject private var model: AppModel
-    @State private var route = ServiceRoute.current()
 
     static let firstSignInNote = """
         The first time, choose Custom MCP agent and name it Tavern. Then, in Personal Agent Proxy, \
@@ -60,41 +59,30 @@ struct ProxySettings: View {
     var body: some View {
         Form {
             Section {
-                Picker("Mail and Linear", selection: $route) {
-                    Text("Personal Agent Proxy").tag(ServiceRoute.proxy)
-                    Text("This Mac's Gmail client and Linear key").tag(ServiceRoute.direct)
+                if let feed = model.mail {
+                    Status(feed: feed)
+                } else {
+                    ProxySignInButton()
                 }
-                .pickerStyle(.radioGroup)
-                .onChange(of: route) { _, new in UserDefaults.standard.set(new.rawValue, forKey: ServiceRoute.defaultsKey) }
+                if let connections = model.proxyConnections {
+                    if connections.isEmpty {
+                        Text("Tavern can't use anything yet. Give it access in Personal Agent Proxy.").foregroundStyle(.secondary)
+                    }
+                    ForEach(connections, id: \.id) { connection in
+                        LabeledContent("\(connection.integration) · \(connection.account)") {
+                            Text(connection.can).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let error = model.proxyError {
+                    Label(error, systemImage: "exclamationmark.triangle").tavernFont(.caption).foregroundStyle(.orange)
+                }
+                Link("Open Personal Agent Proxy", destination: PAP.defaultBase)
+            } header: {
+                Text("Personal Agent Proxy")
             } footer: {
-                Text(route == model.serviceRoute
-                     ? "Personal Agent Proxy needs one sign-in on each Mac, and you set what Tavern may do there."
-                     : "Quit and reopen Tavern to switch.")
+                Text("Mail and Linear come through Personal Agent Proxy: one sign-in on each Mac, and you set what Tavern may do there.")
                     .foregroundStyle(.secondary)
-            }
-
-            if model.serviceRoute == .proxy {
-                Section("Personal Agent Proxy") {
-                    if let feed = model.mail {
-                        Status(feed: feed)
-                    } else {
-                        ProxySignInButton()
-                    }
-                    if let connections = model.proxyConnections {
-                        if connections.isEmpty {
-                            Text("Tavern can't use anything yet. Give it access in Personal Agent Proxy.").foregroundStyle(.secondary)
-                        }
-                        ForEach(connections, id: \.id) { connection in
-                            LabeledContent("\(connection.integration) · \(connection.account)") {
-                                Text(connection.can).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    if let error = model.proxyError {
-                        Label(error, systemImage: "exclamationmark.triangle").tavernFont(.caption).foregroundStyle(.orange)
-                    }
-                    Link("Open Personal Agent Proxy", destination: PAP.defaultBase)
-                }
             }
         }
         .formStyle(.grouped)
@@ -107,7 +95,7 @@ struct ProxySettings: View {
 
         var body: some View {
             switch feed.state {
-            case .signedOut, .signingIn, .notConfigured:
+            case .signedOut, .signingIn:
                 VStack(alignment: .leading, spacing: 8) {
                     Text(ProxySettings.firstSignInNote).foregroundStyle(.secondary)
                     ProxySignInButton()

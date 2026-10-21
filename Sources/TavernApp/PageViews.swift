@@ -343,7 +343,7 @@ private struct SetupBanner: View {
                     Button("Open Settings") { openSettings() }.buttonStyle(PillButtonStyle())
                 }
             }
-            if model.serviceRoute == .proxy, let feed = model.mail {
+            if let feed = model.mail {
                 ProxyBannerRow(feed: feed)
             }
             ForEach(model.discovered) { agent in
@@ -366,7 +366,7 @@ private struct SetupBanner: View {
 extension SetupBanner {
     /// Nothing to set up: no example party, no found agents, no sign-in waiting.
     private var quiet: Bool {
-        model.hasRosterFile && model.discovered.isEmpty && !(model.serviceRoute == .proxy && model.mail?.state == .signedOut)
+        model.hasRosterFile && model.discovered.isEmpty && model.mail?.state != .signedOut
     }
 }
 

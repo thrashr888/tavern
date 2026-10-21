@@ -1,7 +1,6 @@
 import Foundation
 
-/// Linear through Personal Agent Proxy's Linear connection, for `LinearSource` when Tavern has no
-/// key of its own. PAP's issue tools write teams, statuses, projects and labels by name, so here
+/// Linear through Personal Agent Proxy's Linear connection, behind `LinearSource`. PAP's issue tools write teams, statuses, projects and labels by name, so here
 /// a `LinearState` or `LinearProject` id is its name.
 ///
 /// A list gives an issue's summary only (no labels or priority), so open issues are opened one by
@@ -79,7 +78,7 @@ actor PAPLinear {
     private func open(_ identifier: String, updated: String?) async throws -> (issue: LinearIssue, description: String, comments: [LinearComment]) {
         if let updated, let kept = opened[identifier], kept.updated == updated { return (kept.issue, kept.description, kept.comments) }
         let record = try await client.read(try await linear(), "issues_get", ["id": .string(identifier)])["record"] ?? .null
-        guard let issue = issue(from: record) else { throw LinearError.graphQL("No issue \(identifier)") }
+        guard let issue = issue(from: record) else { throw PAPError.tool("No issue \(identifier)") }
         let values = record["values"]
         let found = (issue, values?["description"]?.stringValue ?? "", Self.comments(values?["comments"]?.stringValue ?? ""))
         opened[identifier] = (values?["updated"]?.stringValue ?? updated ?? "", found.0, found.1, found.2)
@@ -191,7 +190,7 @@ actor PAPLinear {
         if let projectID { params["project"] = .string(projectID) }
         if let agentID { params["labels"] = .string(LinearSource.agentLabelName(agentID)) }
         let record = try await client.run(try await linear(), "issues_create", params)["record"] ?? .null
-        guard let identifier = record["id"]?.stringValue else { throw LinearError.graphQL("Linear didn't return the new issue") }
+        guard let identifier = record["id"]?.stringValue else { throw PAPError.tool("Linear didn't return the new issue") }
         return (identifier, record["url"]?.stringValue.flatMap(URL.init(string:)))
     }
 }

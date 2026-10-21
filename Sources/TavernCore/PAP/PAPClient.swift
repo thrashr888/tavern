@@ -1,8 +1,7 @@
 import Foundation
 
 /// Personal Agent Proxy (app.personalagentproxy.com): one sign-in that gives Tavern the party's
-/// mail and Linear with the permissions the user sets there, instead of a Google Cloud client and
-/// a Linear key on each Mac.
+/// mail and Linear with the permissions the user sets there; no Google Cloud client or Linear key.
 ///
 /// PAP's MCP server is Streamable HTTP without sessions: every POST carries one JSON-RPC message
 /// and gets JSON back, signed in with an OAuth bearer token. It has five fixed tools; Tavern uses

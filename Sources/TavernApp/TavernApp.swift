@@ -56,13 +56,9 @@ final class AppModel: ObservableObject {
     @Published var tailscaleError: String?
     /// The read-only party mail feed; nil until started or without an event store.
     @Published var mail: MailFeed?
-    /// Linear for Goals and ⌘K; nil without a `linearTeam` in the roster, or, going direct, without
-    /// ~/.config/linear-key.
+    /// Linear for Goals and ⌘K, through Personal Agent Proxy; nil without a `linearTeam` in the roster.
     let linear: LinearSource?
-    /// Mail and Linear through Personal Agent Proxy, or this Mac's own Gmail client and Linear key.
-    /// Read at launch; a change in Settings applies the next time Tavern opens.
-    let serviceRoute = ServiceRoute.current()
-    /// Tavern's Personal Agent Proxy sign-in and MCP client (used when `serviceRoute` is `.proxy`).
+    /// Tavern's Personal Agent Proxy sign-in and MCP client: mail and Linear both come through it.
     let proxyAuth: PAPOAuth
     let proxy: PAPClient
     /// The accounts PAP lets Tavern use, as last read, for Settings.
@@ -129,10 +125,7 @@ final class AppModel: ObservableObject {
         let client = PAPClient.live(oauth: auth)
         proxyAuth = auth
         proxy = client
-        let route = serviceRoute
-        linear = loaded.linearTeam.flatMap { team in
-            route == .proxy ? LinearSource(proxy: client, teamKey: team) : LinearSource.live(teamKey: team)
-        }
+        linear = loaded.linearTeam.map { LinearSource(proxy: client, teamKey: $0) }
         assignments = assignmentStore?.load() ?? []
         do {
             store = try EventStore(path: EventStore.defaultURL().path)
@@ -367,9 +360,7 @@ final class AppModel: ObservableObject {
     /// Sets up the mail feed and polls if Gmail is already connected on this Mac.
     func startMail() async {
         guard mail == nil, let store else { return }
-        let feed = serviceRoute == .proxy
-            ? await MailFeed.proxy(store: store, oauth: proxyAuth, client: proxy) { [unowned self] in self.roster }
-            : await MailFeed.live(store: store) { [unowned self] in self.roster }
+        let feed = await MailFeed.live(store: store, oauth: proxyAuth, client: proxy) { [unowned self] in self.roster }
         mail = feed
         mailWatch = feed.$threads.sink { [weak self] threads in
             self?.lastSeen = threads.lastSeen()

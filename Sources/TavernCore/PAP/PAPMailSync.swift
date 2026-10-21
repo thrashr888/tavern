@@ -1,19 +1,18 @@
 import Foundation
 
-/// The party's labelled mail through Personal Agent Proxy's Google connection, into the same
-/// event log rows `GmailSync` writes (source `gmail`, Gmail's own message ids, so the two paths
-/// dedup against each other).
+/// Pulls the party's labelled mail into the event log through Personal Agent Proxy's Google
+/// connection: source `gmail`, keyed by Gmail's own message ids.
 ///
 /// PAP lists email with Gmail's search syntax but has no history API, labels or thread ids:
 /// - New mail: a search for the label `after:` the newest stored mail (less a day of overlap,
 ///   which dedup makes harmless). The first run reads up to `fullSyncLimit` of the label.
 /// - Threads: a reply joins the stored thread with its subject (Re:/Fwd: aside), keeping the real
-///   Gmail thread id mail synced directly already has; otherwise the subject is the thread.
+///   Gmail thread id that mail stored before PAP has; otherwise the subject is the thread.
 /// - Verified senders: PAP doesn't pass Gmail's Authentication-Results, so only mail in Sent
-///   (written from this account, which outside mail can't fake) counts as verified here.
+///   (written from this account, which outside mail can't fake) counts as verified.
 /// - Archive: PAP's permissioned `emails_archive`, on each inbox message of the thread.
 @MainActor
-public struct PAPMailSync: MailSyncing {
+public struct PAPMailSync {
     public static let cursorSource = "pap-mail"
     nonisolated static let subjectThreadPrefix = "subject:"
 
@@ -100,33 +99,26 @@ public struct PAPMailSync: MailSyncing {
         }
         guard let values = record["values"] else { return nil }
         let body = values["body"]?.stringValue ?? ""
-        var message = GmailMessage(
+        let message = GmailMessage(
             id: record["id"]?.stringValue ?? id,
             threadID: "",
-            historyID: nil,
             internalDate: values["date"]?.stringValue.flatMap(Self.parseDate) ?? Date(),
             subject: values["subject"]?.stringValue ?? "(no subject)",
             from: values["from"]?.stringValue ?? "",
-            messageIDHeader: nil,
             snippet: String(MailItem.stripQuotedReply(body).prefix(160)),
             body: body
         )
-        message.verifiedDomains = []
         return message
     }
 
     /// Archives every inbox message of a thread through PAP. Messages already out of the inbox
-    /// are skipped; PAP refusing the action for Tavern's login is an error.
+    /// are skipped; PAP refusing the action for Tavern's login throws its words.
     public func archive(threadID: String) async throws {
         let connection = try await mailbox()
         let ids = try store.events(threadKey: MailItem.threadKey(threadID)).map(\.sourceID)
         let inbox = Set(try await list(connection, search: Self.labelQuery(labelName), folder: "Inbox", limit: 500).map(\.id))
         for id in ids where inbox.contains(id) {
-            do {
-                _ = try await client.run(connection, "emails_archive", ["id": .string(id)])
-            } catch let error as PAPError where error.isForbidden {
-                throw GmailError.notAuthorized
-            }
+            _ = try await client.run(connection, "emails_archive", ["id": .string(id)])
         }
     }
 

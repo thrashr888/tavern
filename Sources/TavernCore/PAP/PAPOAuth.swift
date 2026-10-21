@@ -23,7 +23,14 @@ public actor PAPOAuth {
     /// The refresh in flight: two callers refreshing at once would spend the same refresh token.
     private var refreshing: Task<String, Error>?
 
-    public init(base: URL = PAP.defaultBase, keychain: TokenStore = KeychainTokenStore(service: "Tavern Personal Agent Proxy"),
+    /// A separate party (`TAVERN_HOME`: the demo, screenshots) gets a sign-in of its own, so it
+    /// never reads the real party's mail.
+    public static var defaultKeychain: KeychainTokenStore {
+        KeychainTokenStore(service: "Tavern Personal Agent Proxy",
+                           account: TavernPaths.separateHome.map { "refresh-token:\($0.path)" } ?? "refresh-token")
+    }
+
+    public init(base: URL = PAP.defaultBase, keychain: TokenStore = PAPOAuth.defaultKeychain,
                 session: URLSession = .shared) {
         self.base = base
         self.keychain = keychain
@@ -69,10 +76,9 @@ public actor PAPOAuth {
     /// Opens PAP's sign-in and consent page via `open`, waits for the loopback redirect, and
     /// stores the grant.
     public func signIn(open: @escaping @Sendable (URL) -> Void) async throws {
-        let verifier = GmailOAuth.randomURLSafe(bytes: 32)
-        let state = GmailOAuth.randomURLSafe(bytes: 16)
+        let verifier = OAuthPKCE.randomURLSafe(bytes: 32)
+        let state = OAuthPKCE.randomURLSafe(bytes: 16)
         let receiver = try await LoopbackReceiver.start()
-        receiver.donePage = Self.donePage
         defer { receiver.stop() }
         let redirect = "http://127.0.0.1:\(receiver.port)"
         let clientID = try await register(redirect: redirect)
@@ -84,16 +90,16 @@ public actor PAPOAuth {
             URLQueryItem(name: "redirect_uri", value: redirect),
             URLQueryItem(name: "scope", value: Self.scope),
             URLQueryItem(name: "resource", value: resource),
-            URLQueryItem(name: "code_challenge", value: GmailOAuth.challenge(for: verifier)),
+            URLQueryItem(name: "code_challenge", value: OAuthPKCE.challenge(for: verifier)),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
         ]
         open(components.url!)
 
         let query = try await receiver.waitForRedirect()
-        guard query["state"] == state else { throw GmailOAuthError.stateMismatch }
-        if let error = query["error"] { throw GmailOAuthError.denied(error) }
-        guard let code = query["code"] else { throw GmailOAuthError.noCode }
+        guard query["state"] == state else { throw OAuthError.stateMismatch }
+        if let error = query["error"] { throw OAuthError.denied(error) }
+        guard let code = query["code"] else { throw OAuthError.noCode }
 
         let response = try await tokenRequest([
             "grant_type": "authorization_code",
@@ -146,7 +152,7 @@ public actor PAPOAuth {
         var request = URLRequest(url: tokenURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Data(GmailOAuth.formEncode(fields).utf8)
+        request.httpBody = Data(OAuthPKCE.formEncode(fields).utf8)
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
@@ -156,9 +162,4 @@ public actor PAPOAuth {
         }
         return try JSONValue.decode(data)
     }
-
-    static let donePage = """
-        <html><body style="font-family:-apple-system;padding:40px"><h2>Tavern is signed in to Personal Agent Proxy.</h2>\
-        <p>You can close this tab. Tavern reads mail and Linear with the permissions you give it there.</p></body></html>
-        """
 }

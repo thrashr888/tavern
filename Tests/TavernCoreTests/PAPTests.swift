@@ -105,12 +105,11 @@ final class PAPMailSyncTests: XCTestCase {
         XCTAssertEqual(MailThread.threads(from: try store.events(source: EventSource.gmail))[0].messages.count, 3)
     }
 
-    func testReplyJoinsAThreadGmailSyncedDirectly() async throws {
+    func testReplyJoinsAThreadStoredWithItsGmailThreadID() async throws {
         let store = try EventStore(path: ":memory:")
-        let gmail = FakeGmail()
-        gmail.labelIDs = ["g1"]
-        gmail.messages["g1"] = FakeGmail.message("g1", thread: "t-real", subject: "The Guild: Alchemy", body: "Hi")
-        try await GmailSync(api: GmailAPI(http: gmail), store: store, roster: .fixture).sync()
+        let old = GmailMessage(id: "g1", threadID: "t-real", internalDate: Date(timeIntervalSince1970: 1_760_500_000),
+                               subject: "The Guild: Alchemy", from: "Sam <sam@example.com>", snippet: "Hi", body: "Hi")
+        try store.append([MailItem.event(for: old, roster: .fixture)])
 
         mail["g1"] = FakePAP.email("g1", subject: "The Guild: Alchemy", date: "2025-10-15T03:46:40.000Z")
         mail["p2"] = FakePAP.email("p2", subject: "Re: The Guild: Alchemy", date: "2026-10-20T12:00:00.000Z", body: "Reply")
@@ -138,7 +137,7 @@ final class PAPMailSyncTests: XCTestCase {
         XCTAssertEqual(pap.calls.filter { $0.tool == "emails_archive" }.map { $0.params["id"]?.stringValue }, ["a2"])
     }
 
-    func testArchiveRefusedByPAPIsNotAuthorized() async throws {
+    func testArchiveRefusedByPAPSaysSo() async throws {
         let store = try EventStore(path: ":memory:")
         mail["locked"] = FakePAP.email("locked", subject: "Locked", date: "2026-10-20T10:00:00.000Z", body: "x")
         searches[PAPMailSync.labelQuery(Roster.fixture.mailLabelName)] = ["locked"]
@@ -149,8 +148,11 @@ final class PAPMailSyncTests: XCTestCase {
             try await sync.archive(threadID: "subject:locked")
             XCTFail("expected a refusal")
         } catch {
-            XCTAssertEqual(error as? GmailError, .notAuthorized)
+            XCTAssertEqual((error as? PAPError)?.isForbidden, true)
         }
+        let feed = MailFeed(store: store, oauth: nil, signedIn: true) { sync }
+        await feed.archive(MailThread(threadID: "subject:locked", messages: []))
+        XCTAssertEqual(feed.archiveError, "Personal Agent Proxy doesn't let Tavern archive. Allow Archive for Tavern's Gmail there.")
     }
 
     func testNoGmailConnectionSaysSo() async throws {
@@ -167,7 +169,7 @@ final class PAPMailSyncTests: XCTestCase {
     func testSignedOutProxyFeedSignsOut() async throws {
         pap.status = 401
         let store = try EventStore(path: ":memory:")
-        let feed = MailFeed(store: store, oauth: nil, signedIn: true, viaProxy: true) {
+        let feed = MailFeed(store: store, oauth: nil, signedIn: true) {
             PAPMailSync(client: PAPClient(http: self.pap) { "t" }, store: store, roster: .fixture)
         }
         await feed.refresh()
@@ -196,14 +198,6 @@ final class PAPClientTests: XCTestCase {
         } catch let error as PAPError {
             XCTAssertTrue(error.isForbidden)
         }
-    }
-
-    func testServiceRouteDefaultsToProxyWithoutLocalSetup() {
-        let defaults = UserDefaults(suiteName: "tavern.test.\(UUID().uuidString)")!
-        XCTAssertEqual(ServiceRoute.current(defaults: defaults) { _ in false }, .proxy)
-        XCTAssertEqual(ServiceRoute.current(defaults: defaults) { _ in true }, .direct)
-        defaults.set("proxy", forKey: ServiceRoute.defaultsKey)
-        XCTAssertEqual(ServiceRoute.current(defaults: defaults) { _ in true }, .proxy)
     }
 }
 
@@ -246,6 +240,22 @@ final class PAPLinearTests: XCTestCase {
         let update = pap.calls.first { $0.tool == "issues_update" }
         XCTAssertEqual(update?.params["labels"], "Bug, agent:quill")
         XCTAssertEqual(update?.params["id"], "PAUL-2")
+    }
+
+    func testCreateAndEditWriteNamesThroughRun() async throws {
+        let pap = FakePAP()
+        pap.tool = { tool, _ in
+            tool == "issues_create" ? ["record": Self.issue("PAUL-7", title: "New")] : ["record": .null]
+        }
+        let linear = LinearSource(proxy: PAPClient(http: pap) { "t" }, teamKey: "PAUL")
+        let created = try await linear.createIssue(title: "New", description: "Why", projectID: "Tavern", agentID: "Quill")
+        XCTAssertEqual(created.identifier, "PAUL-7")
+        try await linear.updateIssue("PAUL-7", stateID: "In Review", priority: 2)
+        XCTAssertEqual(pap.calls.map(\.tool), ["issues_create", "issues_update"])
+        XCTAssertEqual(pap.calls[0].params["team"], "PAUL")
+        XCTAssertEqual(pap.calls[0].params["project"], "Tavern")
+        XCTAssertEqual(pap.calls[0].params["labels"], "agent:quill")
+        XCTAssertEqual(pap.calls[1].params, ["id": "PAUL-7", "status": "In Review", "priority": "High"])
     }
 
     func testCommentsParseFromPAPsText() {
