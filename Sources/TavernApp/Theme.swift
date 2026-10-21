@@ -109,6 +109,7 @@ struct ThemedContent: ViewModifier {
                 content
             }
         }
+        .background(ThemedWindow(page: theme.palette.map { NSColor($0.page) }))
         .id(stored)
         .onAppear {
             if stored == "sepia" { stored = Theme.parchment.rawValue }
@@ -145,6 +146,22 @@ extension View {
             self.scrollContentBackground(.hidden).background(palette.sidebar)
         } else {
             self
+        }
+    }
+}
+
+/// The window under a themed view: in a party theme its title bar and toolbar (Settings' tabs)
+/// take the page color too.
+struct ThemedWindow: NSViewRepresentable {
+    let page: NSColor?
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.backgroundColor = page ?? .windowBackgroundColor
+            window.titlebarAppearsTransparent = page != nil
         }
     }
 }
