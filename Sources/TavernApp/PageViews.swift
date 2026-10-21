@@ -753,15 +753,37 @@ private struct InspectorToggle: ViewModifier {
     }
 }
 
-/// The open panel's X, in its top right corner.
+/// The open panel's X, in its top right corner, on the same glass as the sidebar (macOS's
+/// sidebars and inspectors are both glass panes), tinted in a party theme.
 private struct InspectorClose: ViewModifier {
     @Binding var isPresented: Bool
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .topTrailing) {
+        content
+        .background {
+            ZStack {
+                PaneGlass()
+                if let palette = Theme.current.palette { palette.sidebar.opacity(0.6) }
+            }
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .topTrailing) {
             CornerButton(systemImage: "xmark", help: "Hide the info panel") { isPresented = false }
         }
     }
+}
+
+/// The sidebar's material, behind the window, for the inspector pane.
+private struct PaneGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// A small icon button on the title bar's line, flush in the top right corner.
