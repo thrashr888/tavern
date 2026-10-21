@@ -18,11 +18,17 @@ struct AttentionItem: Equatable {
     var settles = false
     /// The party member it's about, for the dot on their sidebar row.
     var member: String? = nil
+    var alert: Alert = .notify
+
+    /// How loudly it asks. Only an agent blocked on the user bounces the Dock; chat the user
+    /// sees in Messages anyway only counts on the badge and the sidebar dot.
+    enum Alert { case bounce, notify, quiet }
 }
 
 /// Tells the user when something needs them: a notification for each new "Needs you" item
-/// (clicking it opens the right page), a Dock bounce while Tavern is in the background, and a
-/// Dock badge with the count. Without an app bundle (`swift run`) only the bounce and badge work.
+/// (clicking it opens the right page), one Dock bounce for an agent waiting on an answer while
+/// Tavern is in the background, and a Dock badge with the count. Without an app bundle
+/// (`swift run`) only the bounce and badge work.
 @MainActor
 final class AgentAlerts: NSObject, UNUserNotificationCenterDelegate {
     weak var model: AppModel?
@@ -82,7 +88,7 @@ final class AgentAlerts: NSObject, UNUserNotificationCenterDelegate {
                 continue
             }
             notified.insert(item.id)
-            post(item, sound: true)
+            if item.alert != .quiet { post(item, sound: true) }
         }
         // Forget what's gone, so it notifies again if it comes back.
         notified.formIntersection(ids)
@@ -92,9 +98,7 @@ final class AgentAlerts: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func post(_ item: AttentionItem, sound: Bool) {
-        if !NSApp.isActive {
-            NSApp.requestUserAttention(sound ? .criticalRequest : .informationalRequest)
-        }
+        if item.alert == .bounce, !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         guard canNotify else { return }
         let content = UNMutableNotificationContent()
         content.title = item.title

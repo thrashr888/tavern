@@ -314,7 +314,7 @@ final class AppModel: ObservableObject {
             if let dialog = session.dialog {
                 items.append(AttentionItem(id: "dialog-\(agent.id)-\(dialog.id)", title: "\(agent.name) is waiting on you",
                                            body: [dialog.title, dialog.message].compactMap { $0 }.joined(separator: "\n"),
-                                           page: .agent(id: agent.id), member: agent.id))
+                                           page: .agent(id: agent.id), member: agent.id, alert: .bounce))
             }
             if case .failed(let reason) = session.presence {
                 items.append(AttentionItem(id: "failed-\(agent.id)", title: "\(agent.name) can't connect", body: reason,
@@ -335,7 +335,7 @@ final class AppModel: ObservableObject {
         for item in unansweredIMessages {
             items.append(AttentionItem(id: "imessage-\(item.member.id)-\(item.message.date.timeIntervalSince1970)",
                                        title: "\(item.member.name) is waiting on your reply", body: String(item.message.text.prefix(200)),
-                                       page: .member(id: item.member.id), member: item.member.id))
+                                       page: .member(id: item.member.id), member: item.member.id, alert: .quiet))
         }
         for thread in mailAsks {
             let author = thread.messages.last?.author.flatMap { roster.member(id: $0) }
