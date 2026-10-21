@@ -119,17 +119,17 @@ struct ThemedContent: ViewModifier {
     }
 }
 
-/// A floating surface (palette, popover, sheet, hover card) in a party theme: page color, ink
-/// and accent. Unlike `themed()`, it doesn't redraw itself or set the app's appearance.
+/// A floating surface (palette, popover, sheet, hover card) in a party theme: a tint of the page
+/// color over the system's glass, with the theme's ink and accent. Unlike `themed()`, it doesn't
+/// redraw itself or set the app's appearance.
 struct ThemedSurface: ViewModifier {
     func body(content: Content) -> some View {
         if let palette = Theme.current.palette {
             content
-                .backgroundStyle(palette.page)
                 .foregroundStyle(palette.ink)
                 .tint(palette.accent)
                 .scrollContentBackground(.hidden)
-                .background(palette.page)
+                .background(palette.page.opacity(0.55))
         } else {
             content
         }
@@ -137,13 +137,28 @@ struct ThemedSurface: ViewModifier {
 }
 
 extension View {
+    /// A list row's tag; in a party theme the selected row is the accent with its own text.
+    @ViewBuilder func themedTag<Value: Hashable>(_ value: Value, selection: Value?) -> some View {
+        if let palette = Theme.current.palette, selection == value {
+            self.tag(value)
+                .foregroundStyle(palette.onAccent)
+                .listRowBackground(RoundedRectangle(cornerRadius: 8).fill(palette.accent).padding(.horizontal, 6))
+        } else {
+            self.tag(value)
+        }
+    }
+
+    /// For a `List` whose rows use `themedTag`: no system selection color in a party theme.
+    func themedList() -> some View { background(SidebarHighlight(custom: Theme.current.palette != nil)) }
+
     func themed() -> some View { modifier(ThemedContent()) }
     func themedSurface() -> some View { modifier(ThemedSurface()) }
 
     /// The sidebar's own darker color in a party theme; the system sidebar otherwise.
     @ViewBuilder func themedSidebar(_ theme: Theme) -> some View {
         if let palette = theme.palette {
-            self.scrollContentBackground(.hidden).background(palette.sidebar)
+            // A tint over the sidebar's glass, not a replacement for it.
+            self.scrollContentBackground(.hidden).background(palette.sidebar.opacity(0.6))
         } else {
             self
         }
@@ -161,7 +176,9 @@ struct ThemedWindow: NSViewRepresentable {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             window.backgroundColor = page ?? .windowBackgroundColor
-            window.titlebarAppearsTransparent = page != nil
+            // Only ever turned on: the main window's title bar is already hidden, and turning it
+            // back off would bring a gray band over System, Light and Dark.
+            if page != nil { window.titlebarAppearsTransparent = true }
         }
     }
 }
@@ -191,7 +208,7 @@ struct SidebarLink<Label: View>: View {
     }
 }
 
-/// Turns off the sidebar's system selection color in a party theme, so `SidebarLink` draws its own.
+/// Turns off the window's list selection color in a party theme, so themed rows draw their own.
 struct SidebarHighlight: NSViewRepresentable {
     let custom: Bool
 
@@ -199,9 +216,7 @@ struct SidebarHighlight: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         DispatchQueue.main.async {
-            var node: NSView? = view
-            while let current = node, !(current is NSSplitView) { node = current.superview }
-            guard let root = node else { return }
+            guard let root = view.window?.contentView else { return }
             for table in Self.tables(in: root) {
                 table.selectionHighlightStyle = custom ? .none : .sourceList
             }

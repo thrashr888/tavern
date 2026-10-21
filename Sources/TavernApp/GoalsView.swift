@@ -110,16 +110,16 @@ struct GoalsView: View {
 
     private var filterList: some View {
         List(selection: $filter) {
-            row("All open", symbol: "square.stack", count: issues.count).tag(Filter.all)
+            row("All open", symbol: "square.stack", count: issues.count).themedTag(Filter.all, selection: filter)
             Section("Status") {
                 ForEach(Self.statusOrder, id: \.type) { status in
                     let count = issues.filter { $0.stateType == status.type }.count
-                    if count > 0 { row(status.name, symbol: status.symbol, count: count).tag(Filter.status(status.type)) }
+                    if count > 0 { row(status.name, symbol: status.symbol, count: count).themedTag(Filter.status(status.type), selection: filter) }
                 }
             }
             Section("Projects") {
                 ForEach(counts(\.project), id: \.name) { item in
-                    row(item.name, symbol: "folder", count: item.count).tag(Filter.project(item.name))
+                    row(item.name, symbol: "folder", count: item.count).themedTag(Filter.project(item.name), selection: filter)
                 }
             }
             // Agents first (from agent:<id> labels), then people who own issues.
@@ -133,17 +133,18 @@ struct GoalsView: View {
                             CountBadge(count: count)
                         }
                         .padding(.vertical, 2)
-                        .tag(Filter.agent(member.id))
+                        .themedTag(Filter.agent(member.id), selection: filter)
                     }
                 }
             }
             Section("People") {
                 ForEach(counts(\.owner).filter { name in model.roster.members.allSatisfy { !GoalsView.matches($0, owner: name.name) } }, id: \.name) { item in
-                    row(item.name, symbol: "person", count: item.count).tag(Filter.owner(item.name))
+                    row(item.name, symbol: "person", count: item.count).themedTag(Filter.owner(item.name), selection: filter)
                 }
             }
         }
         .listStyle(.sidebar)
+        .themedList()
     }
 
     private func row(_ title: String, symbol: String, count: Int) -> some View {
@@ -208,20 +209,20 @@ struct GoalsView: View {
                 let shown = self.shown
                 if sort != .status {
                     ForEach(sorted(shown)) { issue in
-                        GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier)
+                        GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection)
                     }
                 } else {
                 ForEach(Self.statusOrder, id: \.type) { status in
                     let group = shown.filter { $0.stateType == status.type }
                     if !group.isEmpty {
                         Section(status.name) {
-                            ForEach(group) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier) }
+                            ForEach(group) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection) }
                         }
                     }
                 }
                 let other = shown.filter { issue in !Self.statusOrder.contains { $0.type == issue.stateType } }
                 if !other.isEmpty {
-                    Section("Other") { ForEach(other) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier) } }
+                    Section("Other") { ForEach(other) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection) } }
                 }
                 }
             }

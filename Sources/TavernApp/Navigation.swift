@@ -43,7 +43,8 @@ struct GoCommands: Commands {
             }
             Divider()
             Button("Agent config") { NotificationCenter.default.post(name: .tavernOpenPage, object: Page.settings.storageKey) }
-                .keyboardShortcut(",", modifiers: .command)
+            // ⌘, stays with Tavern > Settings…, as on every Mac app.
+            SettingsLink { Text("Settings…") }
         }
     }
 }

@@ -67,7 +67,7 @@ struct ServicesView: View {
                                     .padding(.leading, 4)
                             }
                             ForEach(shown) { container in
-                                ContainerListRow(container: container).tag(key(host, container))
+                                ContainerListRow(container: container).themedTag(key(host, container), selection: selection)
                             }
                         }
                     } header: {
@@ -84,6 +84,7 @@ struct ServicesView: View {
                 }
             }
             .listStyle(.sidebar)
+            .themedList()
         }
     }
 

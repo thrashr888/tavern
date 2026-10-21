@@ -45,6 +45,7 @@ struct RootView: View {
                     SearchPalette(selection: $selection) { searching = false }
                         .environmentObject(model)
                         .themedSurface()
+                        .background(.regularMaterial)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
                         .shadow(color: .black.opacity(0.3), radius: 24, y: 10)
@@ -84,7 +85,9 @@ struct RootView: View {
             selection = Page.restore(requested ?? (pageKey.isEmpty ? nil : pageKey), roster: model.roster)
             // TAVERN_SETTINGS=1 opens Settings and TAVERN_SEARCH=1 opens ⌘K, for screenshots.
             if ProcessInfo.processInfo.environment["TAVERN_SETTINGS"] == "1" { openSettings() }
-            if ProcessInfo.processInfo.environment["TAVERN_SEARCH"] == "1" { searching = true }
+            if ProcessInfo.processInfo.environment["TAVERN_SEARCH"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { searching = true }
+            }
         }
         .task { await model.watchTailscale() }
         .task { await model.watchWake() }

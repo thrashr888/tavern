@@ -167,11 +167,12 @@ private struct MembersSettings: View {
                                 Spacer()
                                 Text(member.kind == .pi ? "Pi" : (member.platform ?? "Hosted")).tavernFont(.caption).foregroundStyle(.secondary)
                             }
-                            .tag(member.id)
+                            .themedTag(member.id, selection: selection)
                         }
                         .onMove { roster.members.move(fromOffsets: $0, toOffset: $1) }
                     }
                 }
+                .themedList()
                 Divider()
                 HStack(spacing: 4) {
                     Menu {

@@ -91,8 +91,9 @@ private struct MailFeedView: View {
             Divider()
             statusBar
             List(threads, selection: $selectedThread) { thread in
-                ThreadRow(thread: thread, roster: model.roster).tag(thread.threadID)
+                ThreadRow(thread: thread, roster: model.roster).themedTag(thread.threadID, selection: selectedThread)
             }
+            .themedList()
             .overlay {
                 if threads.isEmpty {
                     Text(!query.trimmingCharacters(in: .whitespaces).isEmpty ? "No threads match “\(query)”."

@@ -68,7 +68,7 @@ struct SearchPalette: View {
             List(selection: $highlighted) {
                 ForEach(results) { result in
                     ResultRow(result: result)
-                        .tag(result.id)
+                        .themedTag(result.id, selection: highlighted)
                         .onTapGesture(count: 2) { open(result, external: false) }
                 }
                 if let linearError, scope == .all || scope == .linear {
@@ -79,6 +79,7 @@ struct SearchPalette: View {
                 }
             }
             .listStyle(.plain)
+            .themedList()
 
             Divider()
             HStack {
