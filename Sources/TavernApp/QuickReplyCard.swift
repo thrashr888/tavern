@@ -10,47 +10,113 @@ extension View {
     }
 }
 
-/// Opens after the pointer rests on the row (like a tooltip) and stays while it's over the row or
-/// the card, or while a reply is being written. A click on the row cancels a card that hasn't
-/// opened yet and closes one that has, and the card never takes that click: it's a non-modal
-/// popover, so the row still opens its page on the first click.
+/// The one quick card in the sidebar: which member it's for, and the hover rules every row
+/// shares. The first hover waits like a tooltip; while a card is open (or just closed), moving to
+/// another row switches to it at once. Leaving both the row and the card closes it, unless a
+/// reply is being written. A click on a row closes it and keeps it closed until the pointer leaves.
+@MainActor
+final class QuickCardController: ObservableObject {
+    static let shared = QuickCardController()
+
+    @Published private(set) var active: String?
+    private var overRow: String?
+    private var overCard = false
+    var writing = false
+    private var clicked: String?
+    private var lastClosed = Date.distantPast
+    private var generation = 0
+
+    func enterRow(_ id: String) {
+        overRow = id
+        generation += 1
+        guard clicked != id else { return }
+        if writing, active != nil, active != id { return }
+        // Already showing one, or one just closed: switch now.
+        if active != nil || Date().timeIntervalSince(lastClosed) < 0.6 {
+            active = id
+            return
+        }
+        let mine = generation
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard mine == generation, overRow == id, clicked != id else { return }
+            active = id
+        }
+    }
+
+    func leaveRow(_ id: String) {
+        if overRow == id { overRow = nil }
+        if clicked == id { clicked = nil }
+        closeSoon()
+    }
+
+    func enterCard() {
+        overCard = true
+        generation += 1
+    }
+
+    func leaveCard() {
+        overCard = false
+        closeSoon()
+    }
+
+    func click(_ id: String) {
+        clicked = id
+        generation += 1
+        close()
+    }
+
+    func stoppedWriting() {
+        writing = false
+        closeSoon()
+    }
+
+    /// Closes unless the pointer reaches the card (or another row) within a moment.
+    private func closeSoon() {
+        generation += 1
+        let mine = generation
+        Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard mine == generation, !overCard, !writing else { return }
+            if let row = overRow, row != clicked { active = row } else { close() }
+        }
+    }
+
+    private func close() {
+        if active != nil { lastClosed = Date() }
+        active = nil
+    }
+}
+
 private struct QuickCardModifier: ViewModifier {
     let member: RosterMember
     @EnvironmentObject private var model: AppModel
-    @State private var overRow = false
-    @State private var overCard = false
+    @ObservedObject private var controller = QuickCardController.shared
     @State private var writing = false
-    @State private var showing = false
-    /// Set by a click on the row; no card until the pointer leaves and comes back.
-    @State private var clicked = false
-    /// Bumps on every change, so a delayed open or close from an older hover does nothing.
-    @State private var generation = 0
+    @State private var overRow = false
     @State private var monitor: Any?
 
     func body(content: Content) -> some View {
         content
             .onHover { inside in
                 overRow = inside
-                if !inside { clicked = false }
-                settle()
+                if inside { controller.enterRow(member.id) } else { controller.leaveRow(member.id) }
             }
             .background(
-                NonModalPopover(isPresented: $showing) {
+                NonModalPopover(isPresented: Binding(get: { controller.active == member.id }, set: { _ in })) {
                     QuickReplyCard(member: member, writing: $writing)
                         .environmentObject(model)
                         .onHover { inside in
-                            overCard = inside
-                            settle()
+                            if inside { controller.enterCard() } else { controller.leaveCard() }
                         }
                 }
             )
+            .onChange(of: writing) { _, now in
+                if now { controller.writing = true } else { controller.stoppedWriting() }
+            }
             .onAppear {
                 monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-                    if overRow {
-                        clicked = true
-                        generation += 1
-                        showing = false
-                    }
+                    if overRow { controller.click(member.id) }
                     return event
                 }
             }
@@ -58,18 +124,6 @@ private struct QuickCardModifier: ViewModifier {
                 if let monitor { NSEvent.removeMonitor(monitor) }
                 monitor = nil
             }
-    }
-
-    private func settle() {
-        generation += 1
-        let mine = generation
-        let wantsOpen = (overRow && !clicked) || overCard
-        Task {
-            try? await Task.sleep(for: .milliseconds(wantsOpen ? 700 : 350))
-            guard mine == generation else { return }
-            if wantsOpen, (overRow && !clicked) || overCard { showing = true }
-            if !wantsOpen, !overRow, !overCard, !writing { showing = false }
-        }
     }
 }
 
@@ -289,8 +343,8 @@ private struct ReplyBox: View {
             }
             if let error { Text(error).tavernFont(.caption).foregroundStyle(.orange) }
         }
-        .onChange(of: focused) { _, now in writing = now || !draft.isEmpty }
-        .onChange(of: draft) { _, now in writing = focused || !now.isEmpty }
+        // Typing (the box focused) keeps the card open; a draft left behind doesn't.
+        .onChange(of: focused) { _, now in writing = now }
         .onDisappear { writing = false }
     }
 
