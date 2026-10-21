@@ -83,7 +83,8 @@ public struct PAPMailSync: MailSyncing {
             message.threadID = threads.thread(for: message.subject)
             events.append(MailItem.event(for: message, roster: roster))
         }
-        let newest = (listed.compactMap(\.date) + events.map(\.sourceTS)).max()
+        // Never ahead of now: a cursor in the future would skip mail until then.
+        let newest = (listed.compactMap(\.date) + events.map(\.sourceTS)).max().map { min($0, Date()) }
         let previous = try store.cursor(for: Self.cursorSource)
         let cursor = newest.map { String(Int($0.timeIntervalSince1970)) } ?? previous ?? String(Int(Date().timeIntervalSince1970))
         return try store.append(events, cursor: (Self.cursorSource, cursor))
