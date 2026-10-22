@@ -17,12 +17,20 @@ final class Decisions: ObservableObject {
         return backend
     }
 
-    /// Asks, logs the answers to the event store, and returns nil on any failure.
+    /// Asks, falling back to Jev when the local model fails; logs the answers to the event store, and
+    /// returns nil on any failure.
     func ask(site: String, state: String, questions: [String: DecisionQuestion], events: EventStore?) async -> [String: DecisionAnswer]? {
         guard !questions.isEmpty, let backend = await ready() else { return nil }
         let started = Date()
-        guard let answers = try? await backend.ask(state: state, questions: questions) else { return nil }
-        _ = try? events?.append([DecisionSuggestions.event(site: site, backend: backend, answers: answers,
+        var used = backend
+        var answers = try? await backend.ask(state: state, questions: questions)
+        // A local model Ollama lists but can't run (an old download format) falls back to Jev.
+        if answers == nil, backend.isLocal, let jev = DecisionBackend.jev() {
+            used = jev
+            answers = try? await jev.ask(state: state, questions: questions)
+        }
+        guard let answers else { return nil }
+        _ = try? events?.append([DecisionSuggestions.event(site: site, backend: used, answers: answers,
                                                            latency: Date().timeIntervalSince(started))])
         return answers
     }
