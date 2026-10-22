@@ -134,6 +134,7 @@ struct PiThreadView: View {
                                 .findHighlight(matched: matches.contains(row.id), current: row.id == currentMatch)
                         case .work(let work): WorkRow(work: work)
                         case .card(_, let card): ToolCardView(card: card, session: session)
+                        case .spell(_, let spell): SpellCastCard(spell: spell)
                         case .background(let run): HeartbeatRow(run: run, session: session)
                         }
                         }

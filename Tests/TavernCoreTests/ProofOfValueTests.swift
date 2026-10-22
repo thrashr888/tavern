@@ -18,6 +18,7 @@ final class ProofOfValueTests: XCTestCase {
             ["type": "toolCall", "id": "c2", "name": "edit", "arguments": ["path": "src/plans.ts"]],
             ["type": "toolCall", "id": "c3", "name": "pap__run", "arguments": ["tool": "emails_create", "params": ["subject": "Re: Deploy"]]],
             ["type": "toolCall", "id": "c4", "name": "cider__weather_current", "arguments": .object([:])],
+            ["type": "toolCall", "id": "c5", "name": "spellbook__spellbook_get", "arguments": ["id": "SB-21"]],
         ])]
         let reply: JSONValue = ["role": "assistant", "stopReason": "stop", "usage": ["cost": ["total": .number(0.5)]], "content": .array([["type": "text", "text": "Done."]])]
         let beat: JSONValue = ["role": "user", "content": .array([["type": "text", "text": "[Heartbeat 2026-10-21] New since the last check."]])]
@@ -38,7 +39,9 @@ final class ProofOfValueTests: XCTestCase {
         XCTAssertEqual(Set(pov.shipped.map(\.kind)), [.pullRequest, .edit, .draft])
         XCTAssertEqual(pov.shipped.first { $0.kind == .pullRequest }?.title, "Fix pricing")
         XCTAssertEqual(pov.shipped.first { $0.kind == .draft }?.title, "Re: Deploy")
-        XCTAssertEqual(pov.tools.map(\.name).sorted(), ["bash", "cider", "edit", "pap"])
+        XCTAssertEqual(pov.tools.map(\.name).sorted(), ["bash", "cider", "edit", "pap", "spellbook"])
+        XCTAssertEqual(pov.spells, [ProofOfValue.ToolUse(name: "SB-21", count: 1)])
+        XCTAssertEqual(pov.spellCasts, 1)
     }
 }
 

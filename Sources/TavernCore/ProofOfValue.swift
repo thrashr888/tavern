@@ -32,6 +32,10 @@ public struct ProofOfValue: Equatable, Sendable {
     public var shipped: [Shipped] = []
     /// Tools by calls this week, most used first, by server (`cider`, `pap`) or Pi's own tool.
     public var tools: [ToolUse] = []
+    /// Spells cast this week: agents' `spellbook_get` calls and runs started in Tavern, by spell id
+    /// or name, most used first.
+    public var spells: [ToolUse] = []
+    public var spellCasts: Int { spells.reduce(0) { $0 + $1.count } }
 
     public init() {}
 
@@ -57,6 +61,7 @@ public struct ProofOfValue: Equatable, Sendable {
         var turns: [String: Int] = [:]   // "day|agent"
         var spend: [String: Double] = [:]
         var tools: [String: Int] = [:]
+        var spells: [String: Int] = [:]
         var shipped: [Shipped] = []
 
         for event in (try? store.events(source: EventSource.pi, since: fortnight)) ?? [] {
@@ -83,15 +88,22 @@ public struct ProofOfValue: Equatable, Sendable {
                 let name = call["name"]?.stringValue ?? "tool"
                 tools[Self.toolGroup(name), default: 0] += 1
                 let arguments = call["arguments"] ?? .object([:])
+                if let spell = Self.spellOpened(name: name, arguments: arguments) { spells[spell, default: 0] += 1 }
                 let id = call["id"]?.stringValue ?? UUID().uuidString
                 if let kind = Self.shippedKind(name: name, arguments: arguments) {
                     shipped.append(Shipped(id: id, agentID: agent, kind: kind.0, title: kind.1, date: event.sourceTS))
                 }
             }
         }
-        for event in (try? store.events(source: EventSource.tavern, since: week)) ?? [] where event.kind == ApprovalLog.kind {
-            let answer = (try? JSONValue.decode(event.payload))?["answer"]?.stringValue
-            if answer == "Approved" { approved += 1 } else if answer == "Declined" { declined += 1 }
+        for event in (try? store.events(source: EventSource.tavern, since: week)) ?? [] {
+            let json = try? JSONValue.decode(event.payload)
+            if event.kind == ApprovalLog.kind {
+                let answer = json?["answer"]?.stringValue
+                if answer == "Approved" { approved += 1 } else if answer == "Declined" { declined += 1 }
+            } else if event.kind == SpellRun.eventKind, let spell = json?["spellId"]?.stringValue {
+                // A run started from Tavern's Spellbook counts as a cast too.
+                spells[spell, default: 0] += 1
+            }
         }
 
         func split(_ key: String) -> (Date, String) {
@@ -103,6 +115,7 @@ public struct ProofOfValue: Equatable, Sendable {
         spendDaily = spend.map { let (day, agent) = split($0.key); return DailySpend(day: day, key: agent, dollars: $0.value) }
             .sorted { $0.day < $1.day }
         self.tools = tools.map { ToolUse(name: $0.key, count: $0.value) }.sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
+        self.spells = spells.map { ToolUse(name: $0.key, count: $0.value) }.sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
         self.shipped = shipped.sorted { $0.date > $1.date }
     }
 
@@ -115,6 +128,12 @@ public struct ProofOfValue: Equatable, Sendable {
     static func toolGroup(_ name: String) -> String {
         if let range = name.range(of: "__") { return String(name[..<range.lowerBound]) }
         return name
+    }
+
+    /// The spell a `spellbook_get` call opened (pi-bundle's spellbook server), by id or name.
+    static func spellOpened(name: String, arguments: JSONValue) -> String? {
+        guard name == "spellbook_get" || name.hasSuffix("__spellbook_get") else { return nil }
+        return arguments["id"]?.stringValue ?? arguments["name"]?.stringValue ?? "spell"
     }
 
     /// PRs opened with gh, drafts saved through PAP, and files edited or written.
