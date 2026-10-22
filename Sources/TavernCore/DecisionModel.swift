@@ -109,7 +109,7 @@ public struct DecisionBackend: Equatable, Sendable {
     /// Jev with the key Alchemy uses: TYPESAFE_API_KEY, the file TYPESAFE_API_KEY_FILE names, or
     /// ~/.config/typesafe/api-key.
     public static func jev(environment: [String: String] = ProcessInfo.processInfo.environment,
-                           home: URL = FileManager.default.homeDirectoryForCurrentUser) -> DecisionBackend? {
+                           home: URL = TavernPaths.userHome) -> DecisionBackend? {
         var key = environment["TYPESAFE_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         if key?.isEmpty ?? true {
             let files = [environment["TYPESAFE_API_KEY_FILE"].map { URL(fileURLWithPath: $0) },
