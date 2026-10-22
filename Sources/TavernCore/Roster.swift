@@ -129,6 +129,8 @@ public struct Roster: Codable, Equatable, Sendable {
     public var spellbookRepo: String?
     /// The spellbook branch to follow; nil follows the repo's default branch.
     public var spellbookBranch: String?
+    /// Spells starred until the user stars or unstars one on this Mac, by SB id.
+    public var spellbookStars: [String]?
 
     public init(members: [RosterMember], mailProjects: [MailProject], partyName: String? = nil, mailLabel: String? = nil,
                 ownerName: String? = nil, linearTeam: String? = nil, lore: [LoreLink]? = nil) {

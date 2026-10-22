@@ -49,6 +49,24 @@ public struct Spell: Codable, Equatable, Identifiable, Sendable {
         self.path = path
     }
 
+    /// Every key but id, name, title and path is optional, so an index that drops one (lifecycle and
+    /// gate went 2026-10-22) still loads.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        title = try c.decode(String.self, forKey: .title)
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? title
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "spell"
+        owner = try c.decodeIfPresent(String.self, forKey: .owner)
+        reviewOwner = try c.decodeIfPresent(String.self, forKey: .reviewOwner)
+        appliesTo = try c.decodeIfPresent([String].self, forKey: .appliesTo) ?? ["all"]
+        lifecycle = try c.decodeIfPresent(String.self, forKey: .lifecycle) ?? "live"
+        gate = try c.decodeIfPresent(String.self, forKey: .gate) ?? "none"
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        path = try c.decode(String.self, forKey: .path)
+    }
+
     /// The number in "SB-nn", for sorting; ids without one sort last.
     public var number: Int { Int(id.split(separator: "-").last ?? "") ?? .max }
     public var isRitual: Bool { kind == "ritual" }
