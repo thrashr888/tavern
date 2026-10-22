@@ -62,7 +62,13 @@ private struct CardWebView: UIViewRepresentable {
         view.navigationDelegate = context.coordinator
         context.coordinator.webView = view
         context.coordinator.theme = colorScheme == .dark ? "dark" : "light"
-        view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
+        // The content policy is spliced into the card's own HTML, so WebKit also blocks every load
+        // but data: and the card's declared image hosts, whatever the page's markup does.
+        let page = page
+        Task { @MainActor in
+            if let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) { controller.add(rules) }
+            view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
+        }
         return view
     }
 
@@ -183,5 +189,30 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private func post(_ message: [String: JSONValue]) {
         guard let data = try? JSONValue.object(message).encoded(), let json = String(data: data, encoding: .utf8) else { return }
         webView?.evaluateJavaScript("window.dispatchEvent(new MessageEvent('message', { data: \(json) }))")
+    }
+}
+
+/// WebKit content rules for cards: block every load except data: URLs, the page itself
+/// (about:blank) and https images from the hosts a card declares. Compiled once per host set.
+@MainActor
+enum CardNetworkRules {
+    private static var cache: [String: WKContentRuleList] = [:]
+
+    static func list(imageDomains: [String]) async -> WKContentRuleList? {
+        let hosts = imageDomains.compactMap { URL(string: $0)?.host ?? ($0.contains("/") ? nil : $0) }.sorted()
+        let key = hosts.joined(separator: ",")
+        if let cached = cache[key] { return cached }
+        var rules: [[String: Any]] = [
+            ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
+            ["trigger": ["url-filter": "^(data|about):"], "action": ["type": "ignore-previous-rules"]],
+        ]
+        for host in hosts {
+            let escaped = NSRegularExpression.escapedPattern(for: host)
+            rules.append(["trigger": ["url-filter": "^https://\\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules), let json = String(data: data, encoding: .utf8) else { return nil }
+        let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "tavern.cards.\(key.hashValue)", encodedContentRuleList: json)
+        if let list { cache[key] = list }
+        return list
     }
 }
