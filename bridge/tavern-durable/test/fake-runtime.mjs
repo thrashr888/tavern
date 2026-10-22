@@ -1,6 +1,7 @@
 // A stand-in for Pi Durable's openDurable(): one conversation that answers each submit with a
 // short turn (thinking, a tool call, then text), driven by timers. "run: <command>" sends the
 // bash call through the extensions' beforeTool hooks first, as the real tool task does.
+// "ask: <json>" runs the extensions' ask tool with those arguments.
 export async function openDurable({ cwd, extensions = [] }) {
   const listeners = new Set();
   let entries = [
@@ -14,6 +15,20 @@ export async function openDurable({ cwd, extensions = [] }) {
   const step = (ms) => new Promise((r) => setTimeout(r, ms));
   let next = 3;
   const memos = new Map();
+  const apiFor = (taskId) => ({
+      taskId,
+      async memo(name, ...rest) {
+        const key = `${taskId}/${name}`;
+        if (rest.length === 1) return memos.get(key);
+        if (!memos.has(key)) memos.set(key, rest[0]);
+        return memos.get(key);
+      },
+    });
+  async function runTool(name, args, taskId) {
+    const tool = extensions.flatMap((e) => e.tools ?? []).find((t) => t.name === name);
+    const result = await tool.execute(args, apiFor(taskId), { abortSignal: undefined });
+    return result.content.map((c) => c.text).join("\n");
+  }
   async function beforeTool(call, taskId) {
     const api = {
       taskId,
@@ -45,7 +60,7 @@ export async function openDurable({ cwd, extensions = [] }) {
         const call = { id: `c${next}`, name: "bash", arguments: { command } };
         live = { generation: live.generation, tools: [call] };
         emit(); await step(20);
-        const answer = await beforeTool(call, `task-${next}`);
+        const answer = text.startsWith("ask: ") ? await runTool("ask", JSON.parse(text.slice(5)), `task-${next}`) : await beforeTool(call, `task-${next}`);
         live = { generation: { message: { role: "assistant", content: [{ type: "thinking", thinking: "Let me" }, { type: "text", text: answer }] } } };
         emit(); await step(20);
         entries = [...entries, { id: `e${next++}`, timestamp: Date.now(), message: { role: "assistant", content: [{ type: "text", text: answer }] } }];

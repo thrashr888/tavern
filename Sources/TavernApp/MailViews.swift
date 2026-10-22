@@ -42,12 +42,13 @@ private struct MailFeedView: View {
         case .signedOut where feed.threads.isEmpty, .signingIn where feed.threads.isEmpty:
             ProxySignInPrompt(purpose: "to read \(model.roster.party) threads")
         default:
-            HStack(spacing: 0) {
-                threadList.frame(width: 340)
+            // The thread list's width is the user's to drag, and stays put.
+            HSplitView {
+                threadList.frame(minWidth: 260, idealWidth: 340, maxWidth: 560)
                     .onAppear(perform: takeFocusedThread)
                     .onChange(of: model.focusedMailThread) { _, _ in takeFocusedThread() }
-                Divider()
-                readingPane.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .splitAutosave("mail")
+                readingPane.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             }
             .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await feed.refresh() } }
         }

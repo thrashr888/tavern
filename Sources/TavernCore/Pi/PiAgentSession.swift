@@ -36,7 +36,12 @@ public final class PiAgentSession: ObservableObject {
     private var listener: Task<Void, Never>?
 
     @Published public private(set) var presence: Presence = .disconnected
-    @Published public private(set) var transcript: [TranscriptItem] = []
+    @Published public private(set) var transcript: [TranscriptItem] = [] {
+        // Built once per change, not on every render (a streaming word re-renders the thread).
+        didSet { rows = PiActivity.rows(from: transcript) }
+    }
+    /// The transcript as thread rows: messages, folded work and heartbeats, cards.
+    public private(set) var rows: [PiThreadRow] = []
     /// Assistant text streaming in for the current turn; cleared when the turn settles.
     @Published public private(set) var streamingText = ""
     /// Thinking streaming in for the current turn, so a long think doesn't look idle.
@@ -85,7 +90,6 @@ public final class PiAgentSession: ObservableObject {
     public var isWorking: Bool { presence == .working }
 
     /// The transcript with tool runs folded into "Worked · N steps" rows.
-    public var rows: [PiThreadRow] { PiActivity.rows(from: transcript) }
 
     /// The turn in progress as a work row, while it has run any tools.
     public var liveWork: PiWork? {

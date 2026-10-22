@@ -17,6 +17,7 @@ struct ServicesView: View {
         HSplitView {
             list
                 .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
+                .splitAutosave("services")
             detail
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }

@@ -68,8 +68,8 @@ struct LinkChip: View {
                 Text(preview?.displayTitle ?? LinkPreview.domain(of: url))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 220, alignment: .leading)
-                    .fixedSize(horizontal: true, vertical: false)
+                    // One width loading or loaded, so a title arriving never reflows the thread.
+                    .frame(width: 200, alignment: .leading)
                 Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.tertiary)
             }
             .tavernFont(.caption, weight: .medium)

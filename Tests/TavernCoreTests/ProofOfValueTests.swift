@@ -11,7 +11,8 @@ final class ProofOfValueTests: XCTestCase {
     func testCountsTurnsSpendToolsShippedAndApprovals() throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("pov-\(UUID()).sqlite").path
         let store = try EventStore(path: path)
-        let now = Date()
+        // Midday, so "today" holds every event below whatever time the test runs.
+        let now = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
         let call: JSONValue = ["role": "assistant", "stopReason": "toolUse", "usage": ["cost": ["total": .number(0.25)]], "content": .array([
             ["type": "toolCall", "id": "c1", "name": "bash", "arguments": ["command": "gh pr create --title \"Fix pricing\" --fill"]],
             ["type": "toolCall", "id": "c2", "name": "edit", "arguments": ["path": "src/plans.ts"]],

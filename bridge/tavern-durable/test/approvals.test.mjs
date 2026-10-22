@@ -58,3 +58,18 @@ test("questions are shown oldest first, one at a time", async () => {
   assert.deepEqual(await b, { allow: true });
   assert.equal(approvals.answer("gone", true), false);
 });
+
+test("ask dialogs: select with options, input without, and bad arguments refused", async () => {
+  const { askDialog, answerText } = await import("../ask.mjs");
+  assert.deepEqual(askDialog({ question: "Pick", options: ["a", "b", "a", " "] }, "t1"), { id: "ask-t1", method: "select", title: "Pick", message: undefined, options: ["a", "b"] });
+  assert.equal(askDialog({ question: "Why?" }, "t2").method, "input");
+  assert.ok(askDialog({ question: "Pick", options: ["only"] }, "t3").error);
+  assert.ok(askDialog({ options: ["a", "b"] }, "t4").error);
+  assert.equal(answerText({ value: "b" }), "Paul answered: b");
+  assert.match(answerText({ cancelled: true }), /dismissed/);
+  assert.match(answerText({ allow: false, note: "aborted" }), /aborted/);
+  const approvals = new Approvals();
+  const waiting = approvals.ask({ id: "ask-x", method: "select", title: "Q", options: ["a", "b"] });
+  assert.equal(approvals.reply("ask-x", { value: "a" }), true);
+  assert.deepEqual(await waiting, { value: "a" });
+});

@@ -16,6 +16,7 @@ struct RootView: View {
             SidebarView(selection: $selection)
                 .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
+                .splitAutosave("sidebar")
         } detail: {
             switch selection ?? .dashboard {
             case .dashboard:
@@ -143,7 +144,8 @@ struct SidebarView: View {
 
             // The whole party: Pi agents live, hosted members by their last mail.
             Section("Party") {
-                ForEach(model.roster.piAgents) { agent in
+                // The home agent (on this Mac) leads the list.
+                ForEach(homeFirst(model.roster.piAgents)) { agent in
                     SidebarLink(selection: selection, value: Page.agent(id: agent.id)) {
                         row {
                             if let session = model.session(for: agent.id) {
@@ -210,6 +212,12 @@ struct SidebarView: View {
         .environment(\.defaultMinListRowHeight, 36)
         .safeAreaInset(edge: .top) { Color.clear.frame(height: 6) }
         .animation(.easeOut(duration: 0.12), value: modifiers.held)
+    }
+
+    /// The home agent first, the rest in roster order.
+    private func homeFirst(_ agents: [RosterMember]) -> [RosterMember] {
+        let home = model.roster.homeAgentID
+        return agents.filter { $0.id == home } + agents.filter { $0.id != home }
     }
 
     private func row<Content: View, Hint: View>(@ViewBuilder _ content: () -> Content, @ViewBuilder hint: () -> Hint) -> some View {
