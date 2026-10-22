@@ -203,21 +203,37 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 enum CardNetworkRules {
     private static var cache: [String: WKContentRuleList] = [:]
 
+    /// A card's declared image hosts that are plain hostnames ("avatars.example.com", or an
+    /// https origin of one); anything else ("*", "https:", quotes, paths) is dropped.
+    static func hosts(_ imageDomains: [String]) -> [String] {
+        imageDomains.compactMap { value in
+            let host = value.hasPrefix("https://") ? URL(string: value)?.host : value
+            guard let host = host?.lowercased(), host.contains("."),
+                  host.range(of: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", options: .regularExpression) != nil
+            else { return nil }
+            return host
+        }.sorted()
+    }
+
     static func list(imageDomains: [String]) async -> WKContentRuleList? {
-        let hosts = imageDomains.compactMap { URL(string: $0)?.host ?? ($0.contains("/") ? nil : $0) }.sorted()
+        let hosts = hosts(imageDomains)
         let key = hosts.joined(separator: ",")
         if let cached = cache[key] { return cached }
         var rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
-            ["trigger": ["url-filter": "^(data|about):"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^data:"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^about:"], "action": ["type": "ignore-previous-rules"]],
         ]
         for host in hosts {
-            let escaped = NSRegularExpression.escapedPattern(for: host)
-            rules.append(["trigger": ["url-filter": "^https://\\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
+            let escaped = host.replacingOccurrences(of: ".", with: "\\.")
+            rules.append(["trigger": ["url-filter": "^https://\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
         }
         guard let data = try? JSONSerialization.data(withJSONObject: rules), let json = String(data: data, encoding: .utf8) else { return nil }
-        let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "tavern.cards.\(key.hashValue)", encodedContentRuleList: json)
-        if let list { cache[key] = list }
+        let identifier = "tavern.cards." + (key.isEmpty ? "none" : key)
+        guard let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) else {
+            return nil
+        }
+        cache[key] = list
         return list
     }
 }
