@@ -112,7 +112,7 @@ struct SidebarView: View {
     /// The Spellbook row stays selected while a spell is open on it.
     private var spellbookPage: Page {
         if case .spellbook = selection { return selection ?? .spellbook(spell: nil) }
-        return .spellbook(spell: nil)
+        return .spellbook(spell: model.spellbook.lastSpell)
     }
 
     var body: some View {

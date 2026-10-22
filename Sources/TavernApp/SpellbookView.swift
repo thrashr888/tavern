@@ -19,6 +19,11 @@ final class SpellbookStore: ObservableObject {
     /// When each spell was last cast, by an agent or a run here, by SB id.
     @Published private(set) var lastUsed: [String: Date] = [:]
     private static let starredKey = "tavern.spellbook.starred"
+    /// The page as last left (open spell, filter, query), so coming back from another page lands
+    /// where you were.
+    @Published var lastSpell: String?
+    @Published var filter: SpellbookView.Filter? = .all
+    @Published var query = ""
     private var documents: [String: SpellDocument] = [:]
     private let runStore = SpellRunStore.defaultURL().map(SpellRunStore.init(url:))
 
@@ -171,9 +176,9 @@ struct SpellbookView: View {
         case lastUsed = "Last used", name = "Name", number = "Number"
     }
 
-    @State private var filter: Filter? = .all
     @AppStorage("tavern.spellbook.sort2") private var sort: Sort = .lastUsed
-    @State private var query = ""
+    private var filter: Filter? { book.filter }
+    private var query: String { book.query }
     /// A decision model's pick for a filter that reads like a task ("draft the weekly update").
     @State private var suggested: (id: String, probability: Double)?
 
@@ -204,6 +209,7 @@ struct SpellbookView: View {
         .navigationTitle("Spellbook")
         .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await book.refresh() } }
         .task(id: query) { await suggest() }
+        .onChange(of: spellID, initial: true) { book.lastSpell = spellID }
         .task {
             while !Task.isCancelled {
                 book.refreshUsage(store: model.store)
@@ -231,7 +237,7 @@ struct SpellbookView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             Divider()
-            List(selection: $filter) {
+            List(selection: $book.filter) {
                 row("All spells", count: current.count).themedTag(Filter.all, selection: filter)
                 row("Starred", count: current.filter { book.starred.contains($0.id) }.count).themedTag(Filter.starred, selection: filter)
                 Section("Type") {
@@ -291,7 +297,7 @@ struct SpellbookView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter spells, or describe a task", text: $query).textFieldStyle(.plain)
+                TextField("Filter spells, or describe a task", text: $book.query).textFieldStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -328,6 +334,7 @@ struct SpellbookView: View {
                     .padding(.horizontal, 14).padding(.bottom, 8)
             }
             Divider()
+            ScrollViewReader { proxy in
             List(selection: selection) {
                 let shown = self.shown
                 let stars = shown.filter { book.starred.contains($0.id) }
@@ -342,6 +349,9 @@ struct SpellbookView: View {
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+            // Back from another page: show the open spell, not the top of the list.
+            .onAppear { if let spellID { proxy.scrollTo(spellID, anchor: .center) } }
+            }
         }
     }
 
@@ -351,6 +361,7 @@ struct SpellbookView: View {
             book.toggleStar(spell.id)
         }
         .themedTag(spell.id, selection: spellID)
+        .id(spell.id)
     }
 
     /// Newest cast first (never-cast spells after, by number), by title, or by number (index order).
