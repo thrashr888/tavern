@@ -383,6 +383,9 @@ private struct NewTicketSheet: View {
     @State private var sendNow = false
     @State private var working = false
     @State private var error: String?
+    /// The decision model's picks for this ticket, shown as chips until tapped.
+    @State private var suggestedProject: String?
+    @State private var suggestedAgent: String?
 
     var body: some View { sheet.themedSurface() }
 
@@ -401,12 +404,22 @@ private struct NewTicketSheet: View {
                         Text("Description (Markdown)").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false)
                     }
                 }
-            Picker("Project", selection: $projectID) {
-                Text("No project").tag(String?.none)
-                ForEach(projects) { Text($0.name).tag(Optional($0.id)) }
+            HStack(spacing: 10) {
+                Picker("Project", selection: $projectID) {
+                    Text("No project").tag(String?.none)
+                    ForEach(projects) { Text($0.name).tag(Optional($0.id)) }
+                }
+                if let suggestion = suggestedProject, suggestion != projectID, let project = projects.first(where: { $0.id == suggestion }) {
+                    SuggestionChip(text: project.name) { projectID = suggestion }
+                }
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text("For").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Text("For").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                    if let suggestion = suggestedAgent, suggestion != agentID, let member = model.roster.member(id: suggestion) {
+                        SuggestionChip(text: member.name) { agentID = suggestion }
+                    }
+                }
                 FlowLayout(spacing: 6) {
                         Button("Nobody") { agentID = nil; sendNow = false }
                             .buttonStyle(PillButtonStyle(selected: agentID == nil))
@@ -439,6 +452,22 @@ private struct NewTicketSheet: View {
             projects = (try? await model.linear?.projects()) ?? []
             if let defaultProject { projectID = projects.first { $0.name == defaultProject }?.id }
         }
+        .task(id: title + "\n" + details) { await suggest() }
+    }
+
+    /// After a pause in typing, asks the decision model who the ticket is for and where it goes.
+    private func suggest() async {
+        let text = [title, details].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard (text.first?.count ?? 0) >= 8 else { return }
+        try? await Task.sleep(for: .milliseconds(1500))
+        guard !Task.isCancelled else { return }
+        let open = projects.filter { !["completed", "canceled"].contains($0.state.lowercased()) }
+        let questions = DecisionSuggestions.ticketQuestions(members: model.roster.members, projects: open.map { (id: $0.id, name: $0.name) })
+        guard let answers = await model.decisions.ask(site: "ticket", state: "Ticket:\n" + text.joined(separator: "\n\n"),
+                                                      questions: questions, events: model.store),
+              !Task.isCancelled else { return }
+        suggestedProject = DecisionSuggestions.pick("project", in: answers)
+        suggestedAgent = DecisionSuggestions.pick("agent", in: answers)
     }
 
     private func create() {

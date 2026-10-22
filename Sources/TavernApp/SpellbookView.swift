@@ -122,6 +122,8 @@ struct SpellbookView: View {
     @State private var kind: String?
     @State private var agent: String?
     @State private var showRetired = false
+    /// A decision model's pick for a search that reads like a task ("draft the weekly update").
+    @State private var suggested: String?
 
     private var selection: Binding<String?> {
         Binding(get: { spellID }, set: { id in page = .spellbook(spell: id) })
@@ -136,6 +138,21 @@ struct SpellbookView: View {
         }
         .navigationTitle("Spellbook")
         .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await book.refresh() } }
+        .task(id: query) { await suggest() }
+    }
+
+    /// Three words or more read as a task: after a pause, ask which spell fits it.
+    private func suggest() async {
+        suggested = nil
+        let task = query.trimmingCharacters(in: .whitespaces)
+        guard task.split(separator: " ").count >= 3, let snapshot = book.snapshot else { return }
+        try? await Task.sleep(for: .milliseconds(1200))
+        guard !Task.isCancelled else { return }
+        let candidates = snapshot.spells.filter { !$0.isRetired }
+        guard let answers = await model.decisions.ask(site: "spellbook", state: "Task: \(task)",
+                                                      questions: DecisionSuggestions.spellQuestions(for: candidates), events: model.store),
+              !Task.isCancelled else { return }
+        suggested = DecisionSuggestions.spell(from: answers)?.id
     }
 
     // MARK: List
@@ -179,6 +196,9 @@ struct SpellbookView: View {
                 }
             } else {
                 List(selection: selection) {
+                    if let suggested, let spell = book.snapshot?.spell(id: suggested) {
+                        SuggestionChip(text: "\(spell.id) \(spell.title)", help: "Clef's pick for “\(query)”") { page = .spellbook(spell: spell.id) }
+                    }
                     if let error = book.error {
                         Label("Showing the last copy\(book.asOf.map { " (\($0))" } ?? ""): \(error)", systemImage: "exclamationmark.triangle")
                             .tavernFont(.caption).foregroundStyle(.orange)

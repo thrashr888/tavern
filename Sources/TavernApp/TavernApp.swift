@@ -93,6 +93,8 @@ final class AppModel: ObservableObject {
     lazy var mcp = TavernMCP(model: self)
     /// The party's spells, from Tavern's read-only clone of the spellbook repo.
     let spellbook = SpellbookStore()
+    /// Clef Flash (or Jev) suggestions: which spell, who a ticket is for, which project.
+    let decisions = Decisions()
     /// Each iMessage conversation as last read, by handle.
     @Published var imessageHistory: [String: [IMessage]] = [:]
     /// Linear issue details, workflow states and projects as last read.
