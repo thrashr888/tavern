@@ -202,3 +202,70 @@ test("risky tool calls wait for a confirm answer, and a reconnecting client is a
     host.kill();
   }
 });
+
+test("ask puts a select or input question to Tavern and returns the answer", async () => {
+  const port = 19990 + Math.floor(Math.random() * 9);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-ap-"));
+  const host = spawn(process.execPath, [here("../host.mjs")], {
+    env: {
+      ...process.env,
+      TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
+      TAVERN_DURABLE_PORT: String(port),
+      TAVERN_DURABLE_REQUESTS: path.join(dir, "requests.json"),
+      TAVERN_DURABLE_HEARTBEAT_MINUTES: "0",
+      AGENT_CWD: dir,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const connect = () => {
+    const socket = net.connect(port, "127.0.0.1");
+    const records = [];
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      let i;
+      while ((i = buffer.indexOf("\n")) >= 0) {
+        records.push(JSON.parse(buffer.slice(0, i)));
+        buffer = buffer.slice(i + 1);
+      }
+    });
+    const send = (record) => socket.write(JSON.stringify(record) + "\n");
+    const waitFor = async (predicate) => {
+      for (let i = 0; i < 300; i++) {
+        const found = records.find(predicate);
+        if (found) return found;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error("timed out");
+    };
+    return { socket, records, send, waitFor };
+  };
+  try {
+    await new Promise((resolve) => host.stderr.on("data", (d) => String(d).includes("listening") && resolve()));
+    const first = connect();
+    first.send({ id: "p1", type: "prompt", message: `ask: ${JSON.stringify({ question: "Which first?", options: ["Diffs", "Charts"], detail: "Both are ready" })}`, requestId: "p1" });
+    const select = await first.waitFor((r) => r.type === "extension_ui_request" && r.method === "select");
+    assert.deepEqual([select.title, select.message, select.options], ["Which first?", "Both are ready", ["Diffs", "Charts"]]);
+    assert.match(select.id, /^ask-/);
+    first.socket.destroy();
+
+    const second = connect();
+    const again = await second.waitFor((r) => r.type === "extension_ui_request" && r.method === "select");
+    assert.equal(again.id, select.id, "a reconnecting client is asked again");
+    second.send({ type: "extension_ui_response", id: select.id, value: "Charts" });
+    await second.waitFor((r) => r.type === "agent_settled");
+    second.send({ id: "g1", type: "get_entries" });
+    assert.equal((await second.waitFor((r) => r.id === "g1")).data.entries.at(-1).message.content[0].text, "Paul answered: Charts");
+
+    second.send({ id: "p2", type: "prompt", message: `ask: ${JSON.stringify({ question: "Name it?", placeholder: "A name" })}`, requestId: "p2" });
+    const input = await second.waitFor((r) => r.type === "extension_ui_request" && r.method === "input");
+    assert.equal(input.placeholder, "A name");
+    second.send({ type: "extension_ui_response", id: input.id, cancelled: true });
+    await new Promise((r) => setTimeout(r, 150));
+    second.send({ id: "g2", type: "get_entries" });
+    assert.equal((await second.waitFor((r) => r.id === "g2")).data.entries.at(-1).message.content[0].text, "Paul dismissed the question without answering.");
+    second.socket.destroy();
+  } finally {
+    host.kill();
+  }
+});

@@ -160,11 +160,16 @@ export class Approvals {
 
   /** Settles a question; returns false for an unknown id. */
   answer(id, allow, note) {
+    return this.reply(id, { allow: allow === true, ...(note ? { note } : {}) });
+  }
+
+  /** Settles a question with any answer: `{value}` or `{cancelled}` for the ask tool's dialogs. */
+  reply(id, result) {
     const entry = this.#pending.get(id);
     if (!entry) return false;
     const wasCurrent = this.current()?.id === id;
     this.#pending.delete(id);
-    entry.resolve({ allow: allow === true, ...(note ? { note } : {}) });
+    entry.resolve(result);
     if (wasCurrent) this.#onChange(this.current());
     return true;
   }
