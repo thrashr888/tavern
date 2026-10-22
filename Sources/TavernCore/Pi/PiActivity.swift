@@ -164,12 +164,15 @@ public enum PiThreadRow: Equatable, Identifiable, Sendable {
     case background(BackgroundRun)
     /// An MCP Apps card a tool result came with, shown after the work that made it.
     case card(id: String, ToolCard)
+    /// A spell the agent opened through the spellbook server, by id or name, shown as a spell card.
+    case spell(id: String, spell: String)
 
     public var id: String {
         switch self {
         case .message(let item): return item.id
         case .work(let work): return "work:\(work.id)"
         case .card(let id, _): return "card:\(id)"
+        case .spell(let id, _): return "spell:\(id)"
         case .background(let run): return "background:\(run.id)"
         }
     }
@@ -271,6 +274,11 @@ public enum PiActivity {
                     step.change = StepChange(toolName: issued.call.name, arguments: issued.call.arguments, diff: item.diff)
                 }
                 steps.append(step)
+                if !item.failed, let id = item.toolCallID, let issued = calls[id],
+                   let spell = ProofOfValue.spellOpened(name: issued.call.name, arguments: issued.call.arguments) {
+                    flush()
+                    rows.append(.spell(id: item.id, spell: spell))
+                }
                 if var card = item.card {
                     if let id = item.toolCallID, let issued = calls[id] { card.arguments = issued.call.arguments }
                     flush()

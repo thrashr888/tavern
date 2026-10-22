@@ -384,8 +384,11 @@ private struct NewTicketSheet: View {
     @State private var working = false
     @State private var error: String?
     /// The decision model's picks for this ticket, shown as chips until tapped.
-    @State private var suggestedProject: String?
-    @State private var suggestedAgent: String?
+    @State private var suggestedProject: (key: String, probability: Double)?
+    @State private var suggestedAgent: (key: String, probability: Double)?
+    /// Close calls on who it's for: the top two, offered as "Did you mean".
+    @State private var closeAgents: [(key: String, probability: Double)] = []
+    @State private var suggestedSpell: (id: String, probability: Double)?
 
     var body: some View { sheet.themedSurface() }
 
@@ -409,15 +412,22 @@ private struct NewTicketSheet: View {
                     Text("No project").tag(String?.none)
                     ForEach(projects) { Text($0.name).tag(Optional($0.id)) }
                 }
-                if let suggestion = suggestedProject, suggestion != projectID, let project = projects.first(where: { $0.id == suggestion }) {
-                    SuggestionChip(text: project.name) { projectID = suggestion }
+                if let suggestion = suggestedProject, suggestion.key != projectID, let project = projects.first(where: { $0.id == suggestion.key }) {
+                    SuggestionChip(label: "Project", value: project.name, confidence: suggestion.probability) { projectID = suggestion.key }
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     Text("For").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
-                    if let suggestion = suggestedAgent, suggestion != agentID, let member = model.roster.member(id: suggestion) {
-                        SuggestionChip(text: member.name) { agentID = suggestion }
+                    if let suggestion = suggestedAgent, suggestion.key != agentID, let member = model.roster.member(id: suggestion.key) {
+                        SuggestionChip(label: "Agent", value: member.name, confidence: suggestion.probability) { agentID = suggestion.key }
+                    } else if suggestedAgent == nil, agentID == nil, closeAgents.count == 2 {
+                        Text("Did you mean").tavernFont(.caption).foregroundStyle(.secondary)
+                        ForEach(closeAgents, id: \.key) { close in
+                            if let member = model.roster.member(id: close.key) {
+                                SuggestionChip(label: "Agent", value: member.name, confidence: close.probability, dashed: true) { agentID = close.key }
+                            }
+                        }
                     }
                 }
                 FlowLayout(spacing: 6) {
@@ -435,6 +445,7 @@ private struct NewTicketSheet: View {
                         .disabled(model.session(for: agentID) == nil)
                 }
             }
+            spellChips
             if let error { Label(error, systemImage: "exclamationmark.triangle").tavernFont(.caption).foregroundStyle(.orange) }
             HStack {
                 Text("Creates the issue in Linear and labels it agent:<name>.").tavernFont(.caption).foregroundStyle(.secondary)
@@ -455,6 +466,31 @@ private struct NewTicketSheet: View {
         .task(id: title + "\n" + details) { await suggest() }
     }
 
+    /// The spell that fits the ticket, when it applies to whoever it's for, and the spell it hands
+    /// off to (dashed: offered, not picked). Tapping adds "Spell: SB-20 v1" to the description.
+    @ViewBuilder private var spellChips: some View {
+        if let suggestion = suggestedSpell, let spell = model.spellbook.snapshot?.spell(id: suggestion.id),
+           agentID.flatMap({ model.roster.member(id: $0) }).map(spell.applies(to:)) ?? true {
+            HStack(spacing: 8) {
+                SuggestionChip(label: "Spell", value: "\(spell.id) \(spell.title)", confidence: suggestion.probability) {
+                    addSpell(spell)
+                }
+                if case .success(let document) = model.spellbook.document(for: spell),
+                   let next = document.chainedSpell(from: spell.id).flatMap({ model.spellbook.snapshot?.spell(id: $0) }) {
+                    SuggestionChip(label: "then", value: next.id, dashed: true, help: "\(spell.id) hands off to \(next.id) \(next.title)") {
+                        addSpell(spell)
+                        addSpell(next)
+                    }
+                }
+            }
+        }
+    }
+
+    private func addSpell(_ spell: Spell) {
+        guard !details.contains(spell.citation) else { return }
+        details += (details.isEmpty ? "" : "\n\n") + "Spell: \(spell.citation)"
+    }
+
     /// After a pause in typing, asks the decision model who the ticket is for and where it goes.
     private func suggest() async {
         let text = [title, details].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -462,12 +498,25 @@ private struct NewTicketSheet: View {
         try? await Task.sleep(for: .milliseconds(1500))
         guard !Task.isCancelled else { return }
         let open = projects.filter { !["completed", "canceled"].contains($0.state.lowercased()) }
-        let questions = DecisionSuggestions.ticketQuestions(members: model.roster.members, projects: open.map { (id: $0.id, name: $0.name) })
+        var questions = DecisionSuggestions.ticketQuestions(members: model.roster.members, projects: open.map { (id: $0.id, name: $0.name) })
+        let spells = model.spellbook.snapshot?.spells.filter { !$0.isRetired } ?? []
+        questions.merge(DecisionSuggestions.spellQuestions(for: spells)) { first, _ in first }
         guard let answers = await model.decisions.ask(site: "ticket", state: "Ticket:\n" + text.joined(separator: "\n\n"),
                                                       questions: questions, events: model.store),
               !Task.isCancelled else { return }
-        suggestedProject = DecisionSuggestions.pick("project", in: answers)
-        suggestedAgent = DecisionSuggestions.pick("agent", in: answers)
+        func top(_ id: String) -> (key: String, probability: Double)? {
+            DecisionSuggestions.pick(id, in: answers).map { key in
+                (key, DecisionSuggestions.ranked(id, in: answers).first { $0.key == key }?.probability ?? answers[id]?.confidence ?? 0)
+            }
+        }
+        suggestedProject = top("project")
+        suggestedAgent = top("agent")
+        let ranked = DecisionSuggestions.ranked("agent", in: answers)
+        closeAgents = ranked.count >= 2 && ranked[0].probability + ranked[1].probability >= 0.6 ? Array(ranked.prefix(2)) : []
+        suggestedSpell = DecisionSuggestions.spell(from: answers).map { pick in
+            (pick.id, DecisionSuggestions.ranked(answers.first { $0.value.choice == pick.id }?.key ?? "", in: answers)
+                .first { $0.key == pick.id }?.probability ?? pick.confidence)
+        }
     }
 
     private func create() {

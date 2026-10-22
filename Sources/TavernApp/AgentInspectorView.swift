@@ -48,6 +48,7 @@ struct AgentInspectorView: View {
                     case .activity:
                         // What the agent did, then what it asked the user. Waiting dialogs also show in the thread.
                         AgentTasksSection(agent: agent)
+                        AgentSpellCasts(member: agent, book: model.spellbook)
                         if let session = model.session(for: agent.id) {
                             ActivitySection(session: session)
                             if let store = model.store {

@@ -11,7 +11,7 @@ final class SpellbookStore: ObservableObject {
     @Published private(set) var syncing = false
     @Published private(set) var refreshedAt: Date?
     @Published private(set) var repo: SpellbookRepo?
-    /// Runs started here, newest first (slice 2: manual checklists).
+    /// Runs started here, newest first (mock 2: running a spell by hand).
     @Published private(set) var runs: [SpellRun] = []
     @Published private(set) var runError: String?
     private var documents: [String: SpellDocument] = [:]
@@ -21,27 +21,31 @@ final class SpellbookStore: ObservableObject {
 
     /// The newest unfinished run of a spell.
     func openRun(for spellID: String) -> SpellRun? { runs.first { $0.spellID == spellID && !$0.isFinished } }
+    func run(id: String) -> SpellRun? { runs.first { $0.id == id } }
+    func runs(of spellID: String) -> [SpellRun] { runs.filter { $0.spellID == spellID } }
 
-    /// Starts a checklist from the spell's steps, and logs the start so it counts as a cast.
-    func startRun(_ spell: Spell, document: SpellDocument, agentID: String?, events: EventStore?) {
-        let run = SpellRun(spell: spell, document: document, commit: snapshot?.commit, agentID: agentID)
+    /// The spell a spell's steps hand off to, when it's in the spellbook and readable.
+    func chained(after spell: Spell, document: SpellDocument) -> (Spell, SpellDocument)? {
+        guard let id = document.chainedSpell(from: spell.id), let next = snapshot?.spell(id: id),
+              case .success(let nextDocument) = self.document(for: next), !nextDocument.steps.isEmpty else { return nil }
+        return (next, nextDocument)
+    }
+
+    /// Starts a checklist from the spell's steps (and the spell it chains into), and logs the start
+    /// so it counts as a cast. Returns the run's id.
+    @discardableResult
+    func startRun(_ spell: Spell, document: SpellDocument, chain: Bool, agentID: String?, issue: String?, events: EventStore?) -> String {
+        var parts = [SpellRun.Part(spell: spell, document: document)]
+        if chain, let (next, nextDocument) = chained(after: spell, document: document) {
+            parts.append(SpellRun.Part(spell: next, document: nextDocument))
+        }
+        let run = SpellRun(parts: parts, commit: snapshot?.commit, agentID: agentID, issue: issue)
         save(run)
         _ = try? events?.append([run.startEvent])
+        return run.id
     }
 
-    func toggle(_ step: Int, in run: SpellRun) {
-        var run = run
-        run.toggle(step)
-        save(run)
-    }
-
-    func finish(_ run: SpellRun) {
-        var run = run
-        run.finishedAt = Date()
-        save(run)
-    }
-
-    private func save(_ run: SpellRun) {
+    func save(_ run: SpellRun) {
         do {
             runs = try runStore?.save(run) ?? runs
             runError = nil
@@ -103,42 +107,212 @@ final class SpellbookStore: ObservableObject {
         }
     }
 
-    /// "as of 3f2a1c9, 2 hours ago", for the page and the detail's source line.
+    /// "abc1234 · 2h ago": the commit the spells came from.
     var asOf: String? {
-        guard let snapshot, let commit = snapshot.commit else { return nil }
-        let when = snapshot.committedAt.map { ", \($0.formatted(.relative(presentation: .named)))" } ?? ""
-        return "\(commit)\(when)"
+        guard let commit = snapshot?.commit else { return nil }
+        let short = String(commit.prefix(7))
+        guard let date = snapshot?.committedAt else { return short }
+        return "\(short) · \(date.formatted(.relative(presentation: .named)))"
     }
+
+    func fileURL(for spell: Spell) -> URL? { repo?.directory.appendingPathComponent(spell.path) }
+
+    /// The spell's history on GitHub, when the repo is a GitHub URL.
+    func historyURL(for spell: Spell) -> URL? {
+        guard let source = repo?.source, source.repo.hasPrefix("https://github.com/") else { return nil }
+        let base = source.repo.hasSuffix(".git") ? String(source.repo.dropLast(4)) : source.repo
+        return URL(string: "\(base)/commits/\(source.branch ?? "HEAD")/\(spell.path)")
+    }
+
+    /// Finds a spell by id or by name (`spellbook_get` calls can use either).
+    func spell(_ key: String) -> Spell? { snapshot?.spells.first { $0.id == key || $0.name == key } }
 }
 
-/// Spells, read-only (mocks 1 to 4): a filterable list grouped by lifecycle, and the open spell's
-/// SKILL.md. Pages restore by SB id.
+/// Spells, read-only (mock 1), laid out like Goals: filters with counts (type, lifecycle, gate,
+/// owner), the matching spells by lifecycle, and the open spell. Pages restore by SB id.
 struct SpellbookView: View {
+    enum Filter: Hashable {
+        case all
+        case kind(String)
+        case lifecycle(String)
+        case gate(String)
+        case owner(String)
+    }
+
     @EnvironmentObject private var model: AppModel
     @ObservedObject var book: SpellbookStore
     @Binding var page: Page?
     let spellID: String?
+    @State private var filter: Filter? = .all
     @State private var query = ""
-    @State private var kind: String?
-    @State private var agent: String?
-    @State private var showRetired = false
-    /// A decision model's pick for a search that reads like a task ("draft the weekly update").
-    @State private var suggested: String?
+    /// A decision model's pick for a filter that reads like a task ("draft the weekly update").
+    @State private var suggested: (id: String, probability: Double)?
 
     private var selection: Binding<String?> {
         Binding(get: { spellID }, set: { id in page = .spellbook(spell: id) })
     }
 
     var body: some View {
-        HSplitView {
-            list
-                .frame(minWidth: 280, idealWidth: 340, maxWidth: 440)
-            detail
-                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if book.repo == nil {
+                note("No spellbook yet", "Add \"spellbookRepo\" (a git URL) to roster.json in Settings, and Tavern keeps a read-only copy.")
+            } else if book.snapshot == nil, let error = book.error {
+                VStack(spacing: 10) {
+                    note("Couldn't get the spellbook", "\(error)\n\nTavern runs: \(book.repo?.cloneCommand ?? "")")
+                    Button("Try again") { Task { await book.refresh() } }.buttonStyle(PillButtonStyle())
+                }
+                .padding(.bottom, 40)
+            } else if book.snapshot == nil {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HSplitView {
+                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260)
+                    spellList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
+                    detail.frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
         .navigationTitle("Spellbook")
         .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await book.refresh() } }
         .task(id: query) { await suggest() }
+    }
+
+    // MARK: Filters
+
+    private var all: [Spell] { book.snapshot?.spells ?? [] }
+    private var current: [Spell] { all.filter { !$0.isRetired } }
+
+    private var filters: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(book.asOf.map { "@ \($0)" } ?? "").tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                if book.syncing { ProgressView().controlSize(.small) }
+                Button { Task { await book.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Pull the spellbook")
+                    .disabled(book.syncing)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            List(selection: $filter) {
+                row("All spells", count: current.count).themedTag(Filter.all, selection: filter)
+                Section("Type") {
+                    row("Spells", count: current.filter { !$0.isRitual }.count).themedTag(Filter.kind("spell"), selection: filter)
+                    row("Rituals", count: current.filter(\.isRitual).count).themedTag(Filter.kind("ritual"), selection: filter)
+                }
+                Section("Lifecycle") {
+                    ForEach(["live", "proposal", "retired"], id: \.self) { lifecycle in
+                        row(lifecycle.capitalized, count: all.filter { $0.lifecycle == lifecycle }.count)
+                            .themedTag(Filter.lifecycle(lifecycle), selection: filter)
+                    }
+                }
+                Section("Gate") {
+                    ForEach(["needs-paul", "needs-review", "blocked"], id: \.self) { gate in
+                        row(SpellPill.gateLabel(gate, owner: model.roster.owner), count: current.filter { $0.gate == gate }.count)
+                            .themedTag(Filter.gate(gate), selection: filter)
+                    }
+                }
+                Section("Owner") {
+                    ForEach(owners, id: \.name) { item in
+                        row(memberName(item.name), count: item.count).themedTag(Filter.owner(item.name), selection: filter)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .themedList()
+        }
+    }
+
+    private var owners: [(name: String, count: Int)] {
+        Dictionary(grouping: current.compactMap(\.owner), by: { $0 })
+            .map { ($0.key, $0.value.count) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
+    }
+
+    private func memberName(_ id: String) -> String {
+        model.roster.member(id: id)?.name ?? model.roster.members.first { $0.name.lowercased() == id.lowercased() }?.name ?? id.capitalized
+    }
+
+    private func row(_ title: String, count: Int) -> some View {
+        HStack {
+            Text(title).lineLimit(1)
+            Spacer()
+            CountBadge(count: count)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: Spells
+
+    private var shown: [Spell] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let pool: [Spell]
+        switch filter ?? .all {
+        case .all: pool = current
+        case .kind(let kind): pool = current.filter { $0.kind == kind }
+        case .lifecycle(let lifecycle): pool = all.filter { $0.lifecycle == lifecycle }
+        case .gate(let gate): pool = current.filter { $0.gate == gate }
+        case .owner(let owner): pool = current.filter { $0.owner == owner }
+        }
+        guard !q.isEmpty else { return pool }
+        return pool.filter { spell in
+            spell.id.lowercased() == q || spell.id.lowercased().hasSuffix("-\(q)") || spell.title.lowercased().contains(q)
+                || spell.description.lowercased().contains(q)
+        }
+    }
+
+    private static let groups = ["live", "proposal", "retired"]
+
+    private var spellList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Filter spells, or describe a task", text: $query).textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            if let suggested, let spell = book.snapshot?.spell(id: suggested.id) {
+                HStack(spacing: 6) {
+                    Text("Fits:").tavernFont(.caption).foregroundStyle(.secondary)
+                    SuggestionChip(label: "Spell", value: "\(spell.id) \(spell.title)", confidence: suggested.probability) {
+                        page = .spellbook(spell: spell.id)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+            if let error = book.error {
+                Label("Showing the last copy: \(error)", systemImage: "exclamationmark.triangle")
+                    .tavernFont(.caption).foregroundStyle(.orange)
+                    .padding(.horizontal, 14).padding(.bottom, 8)
+            }
+            Divider()
+            List(selection: selection) {
+                let shown = self.shown
+                ForEach(Self.groups, id: \.self) { lifecycle in
+                    let group = shown.filter { $0.lifecycle == lifecycle }
+                    if !group.isEmpty {
+                        Section(lifecycle.capitalized) {
+                            ForEach(group) { SpellRow(spell: $0, owner: $0.owner.map(memberName)).themedTag($0.id, selection: spellID) }
+                        }
+                    }
+                }
+                // Lifecycles a newer repo adds still show.
+                let other = shown.filter { !Self.groups.contains($0.lifecycle) }
+                if !other.isEmpty {
+                    Section("Other") { ForEach(other) { SpellRow(spell: $0, owner: $0.owner.map(memberName)).themedTag($0.id, selection: spellID) } }
+                }
+                if shown.isEmpty { Text("No matches").tavernFont(.caption).foregroundStyle(.tertiary) }
+            }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+        }
     }
 
     /// Three words or more read as a task: after a pause, ask which spell fits it.
@@ -151,123 +325,12 @@ struct SpellbookView: View {
         let candidates = snapshot.spells.filter { !$0.isRetired }
         guard let answers = await model.decisions.ask(site: "spellbook", state: "Task: \(task)",
                                                       questions: DecisionSuggestions.spellQuestions(for: candidates), events: model.store),
-              !Task.isCancelled else { return }
-        suggested = DecisionSuggestions.spell(from: answers)?.id
-    }
-
-    // MARK: List
-
-    private var spells: [Spell] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let member = agent.flatMap { model.roster.member(id: $0) }
-        return (book.snapshot?.spells ?? []).filter { spell in
-            (showRetired || !spell.isRetired)
-                && (kind == nil || spell.kind == kind)
-                && (member.map(spell.applies(to:)) ?? true)
-                && (q.isEmpty || [spell.id, spell.title, spell.description].contains { $0.lowercased().contains(q) })
-        }
-    }
-
-    private static let groups: [(lifecycle: String, title: String)] = [("live", "Live"), ("proposal", "Proposals"), ("retired", "Retired")]
-
-    private var list: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search spells", text: $query).textFieldStyle(.plain)
-                if book.syncing { ProgressView().controlSize(.small) }
-                Button { Task { await book.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help(book.asOf.map { "As of \($0)" } ?? "Refresh")
-                    .disabled(book.repo == nil)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            filters
-            Divider()
-            if book.repo == nil {
-                setup("No spellbook yet", detail: "Add \"spellbookRepo\" (a git URL) to roster.json, and Tavern keeps a read-only copy.")
-            } else if book.snapshot == nil {
-                if let error = book.error {
-                    setup("Couldn't get the spellbook", detail: "\(error)\n\nTavern runs: \(book.repo?.cloneCommand ?? "")", retry: true)
-                } else {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                List(selection: selection) {
-                    if let suggested, let spell = book.snapshot?.spell(id: suggested) {
-                        SuggestionChip(text: "\(spell.id) \(spell.title)", help: "Clef's pick for “\(query)”") { page = .spellbook(spell: spell.id) }
-                    }
-                    if let error = book.error {
-                        Label("Showing the last copy\(book.asOf.map { " (\($0))" } ?? ""): \(error)", systemImage: "exclamationmark.triangle")
-                            .tavernFont(.caption).foregroundStyle(.orange)
-                    }
-                    ForEach(Self.groups, id: \.lifecycle) { group in
-                        let shown = spells.filter { $0.lifecycle == group.lifecycle }
-                        if !shown.isEmpty {
-                            Section {
-                                ForEach(shown) { spell in
-                                    SpellRow(spell: spell).themedTag(spell.id, selection: spellID)
-                                }
-                            } header: {
-                                HStack {
-                                    Text(group.title)
-                                    Spacer()
-                                    CountBadge(count: shown.count)
-                                }
-                            }
-                        }
-                    }
-                    // Lifecycles a newer repo adds still show.
-                    let others = spells.filter { spell in !Self.groups.contains { $0.lifecycle == spell.lifecycle } }
-                    if !others.isEmpty {
-                        Section("Other") {
-                            ForEach(others) { SpellRow(spell: $0).themedTag($0.id, selection: spellID) }
-                        }
-                    }
-                    if spells.isEmpty { Text("No matches").tavernFont(.caption).foregroundStyle(.tertiary) }
-                }
-                .listStyle(.sidebar)
-                .themedList()
-            }
-        }
-    }
-
-    private var filters: some View {
-        HStack(spacing: 6) {
-            Menu(kind.map { $0 == "ritual" ? "Rituals" : "Spells" } ?? "All kinds") {
-                Button("All kinds") { kind = nil }
-                Button("Spells") { kind = "spell" }
-                Button("Rituals") { kind = "ritual" }
-            }
-            Menu(agent.flatMap { model.roster.member(id: $0)?.name } ?? "Everyone") {
-                Button("Everyone") { agent = nil }
-                ForEach(model.roster.members) { member in
-                    Button(member.name) { agent = member.id }
-                }
-            }
-            Toggle("Retired", isOn: $showRetired).toggleStyle(.checkbox)
-            Spacer()
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize(horizontal: false, vertical: true)
-        .tavernFont(.caption)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-    }
-
-    private func setup(_ title: String, detail: String, retry: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).tavernFont(.headline)
-            Text(detail).tavernFont(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-            if retry {
-                Button("Try again") { Task { await book.refresh() } }.buttonStyle(PillButtonStyle())
-            }
-            Spacer()
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+              !Task.isCancelled, let pick = DecisionSuggestions.spell(from: answers) else { return }
+        let probability = answers.values.compactMap { answer -> Double? in
+            guard case .choice(let key, let probabilities, _) = answer, key == pick.id else { return nil }
+            return probabilities[key]
+        }.max() ?? pick.confidence
+        suggested = (pick.id, probability)
     }
 
     // MARK: Detail
@@ -275,7 +338,7 @@ struct SpellbookView: View {
     @ViewBuilder
     private var detail: some View {
         if let spellID, let spell = book.snapshot?.spell(id: spellID) {
-            SpellDetail(book: book, spell: spell, document: book.document(for: spell), asOf: book.asOf, page: $page)
+            SpellDetail(book: book, spell: spell, document: book.document(for: spell)).id(spell.id)
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "book.closed").font(.system(size: 34)).foregroundStyle(.tertiary)
@@ -284,116 +347,495 @@ struct SpellbookView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
+
+    private func note(_ title: String, _ detail: String) -> some View {
+        VStack(spacing: 8) {
+            Text(title).tavernFont(.title2, weight: .semibold)
+            Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 460).textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
+/// Title, then "SB-20 · Wololo" and the spell's pills: Ritual, its lifecycle, its gate.
 private struct SpellRow: View {
     let spell: Spell
+    let owner: String?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(spell.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(spell.title).tavernFont(.callout, weight: .semibold).lineLimit(1)
-                    if spell.isRitual { Image(systemName: "repeat").imageScale(.small).foregroundStyle(.secondary).help("Ritual") }
-                }
-                Text(spell.trigger).tavernFont(.caption).foregroundStyle(.secondary).lineLimit(2)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(spell.title).tavernFont(.body, weight: .semibold).lineLimit(1)
+            HStack(spacing: 6) {
+                Text(spell.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                if let owner { Text("· \(owner)").tavernFont(.caption).foregroundStyle(.secondary) }
+                SpellPills(spell: spell)
             }
-            Spacer(minLength: 0)
-            GateBadge(gate: spell.gate)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
         .padding(.horizontal, 4)
     }
 }
 
-/// A spell's gate when it isn't "none": needs-<owner> in the Needs-you color, Blocked in red.
-struct GateBadge: View {
-    let gate: String
-    @EnvironmentObject private var model: AppModel
+/// An outlined capsule: Ritual, Live, Proposal, Needs review, Needs <owner>, Blocked.
+struct SpellPill: View {
+    let text: String
+    let color: Color
 
     var body: some View {
-        if gate != "none" {
-            let color: Color = gate == "needs-paul" ? .orange : gate == "blocked" ? .red : .secondary
-            Text(Self.label(gate, owner: model.roster.owner))
-                .tavernFont(.caption, weight: .semibold)
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(color.opacity(0.18), in: Capsule())
-                .foregroundStyle(color)
-        }
+        Text(text)
+            .tavernFont(.caption, weight: .medium)
+            .padding(.horizontal, 7).padding(.vertical, 1)
+            .foregroundStyle(color)
+            .overlay(Capsule().strokeBorder(color.opacity(0.8)))
     }
 
-    static func label(_ gate: String, owner: String) -> String {
+    static func gateLabel(_ gate: String, owner: String) -> String {
         switch gate {
         case "needs-paul": return "Needs \(owner)"
-        case "needs-review": return "Review"
+        case "needs-review": return "Needs review"
         case "blocked": return "Blocked"
         default: return gate.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
+
+    static func lifecycleColor(_ lifecycle: String) -> Color { lifecycle == "live" ? .green : .secondary }
+
+    static func gateColor(_ gate: String) -> Color {
+        switch gate {
+        case "needs-paul", "blocked": return .red
+        case "needs-review": return .orange
+        default: return .secondary
+        }
+    }
 }
 
+struct SpellPills: View {
+    let spell: Spell
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if spell.isRitual { SpellPill(text: "Ritual", color: .tavernAccent) }
+            SpellPill(text: spell.lifecycle.capitalized, color: SpellPill.lifecycleColor(spell.lifecycle))
+            if spell.gate != "none" {
+                SpellPill(text: SpellPill.gateLabel(spell.gate, owner: model.roster.owner), color: SpellPill.gateColor(spell.gate))
+            }
+        }
+    }
+}
+
+/// A filled accent capsule, for the one primary action (Start run…).
+struct PrimaryPillStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .tavernFont(.callout, weight: .semibold)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .foregroundStyle(.white)
+            .background(Color.tavernAccent.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 8))
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// One spell (mock 1): who and what it is, the actions, its facts, its steps, its permissions kept
+/// apart from the steps, and where the text came from.
 private struct SpellDetail: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var book: SpellbookStore
     let spell: Spell
     let document: Result<SpellDocument, SpellbookError>
-    let asOf: String?
-    @Binding var page: Page?
+    @State private var running = false
+    @State private var lastCast: Date?
 
     private func name(_ id: String?) -> String {
         guard let id else { return "–" }
-        return model.roster.member(id: id)?.name ?? model.roster.members.first { $0.name.lowercased() == id.lowercased() }?.name ?? id
+        return model.roster.member(id: id)?.name ?? model.roster.members.first { $0.name.lowercased() == id.lowercased() }?.name ?? id.capitalized
     }
+
+    /// Sections shown in their own places; anything else follows Permissions as written.
+    private static let placed: Set<String> = ["when to use", "inputs", "done when", "tools", "steps", "permissions"]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        Text(spell.title).tavernFont(.title2, weight: .semibold)
-                        GateBadge(gate: spell.gate)
-                    }
-                    Text(spell.trigger).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                Text([spell.id, "v\(spell.version)", spell.isRitual ? "Ritual" : "Spell", "owner \(name(spell.owner))",
+                      "reviewed by \(name(spell.reviewOwner))"].joined(separator: " · "))
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(spell.title).tavernFont(.title, weight: .bold)
+                HStack(spacing: 6) {
+                    SpellPills(spell: spell)
+                    Text("For \(spell.appliesTo.map { $0 == "all" ? "everyone" : name($0) }.joined(separator: ", "))")
+                        .tavernFont(.caption).foregroundStyle(.secondary)
                 }
-
-                if case .success(let document) = document {
-                    if let run = book.openRun(for: spell.id) {
-                        SpellRunCard(book: book, run: run)
-                    } else {
-                        RunButton(book: book, spell: spell, document: document)
-                    }
-                }
+                actions
                 if let error = book.runError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
-
-                InfoCard(title: spell.isRitual ? "Ritual" : "Spell") {
-                    InfoRow(label: "ID", value: spell.citation, monospaced: true, copyable: true)
-                    InfoRow(label: "Status", value: spell.lifecycle.capitalized)
-                    InfoRow(label: "Owner", value: name(spell.owner))
-                    InfoRow(label: "Reviewer", value: name(spell.reviewOwner))
-                    InfoRow(label: "For", value: spell.appliesTo.map { $0 == "all" ? "Everyone" : name($0) }.joined(separator: ", "))
-                    if let asOf { InfoRow(label: "Source", value: "\(spell.path) at \(asOf)", monospaced: true) }
-                }
 
                 switch document {
                 case .success(let document):
-                    ForEach(Array(document.sections.enumerated()), id: \.offset) { _, section in
-                        VStack(alignment: .leading, spacing: 8) {
+                    facts(document)
+                    if !document.steps.isEmpty { steps(document) }
+                    if let permissions = document.section("Permissions") { permissionsBox(permissions.body) }
+                    ForEach(Array(document.sections.filter { !Self.placed.contains($0.title.lowercased()) }.enumerated()), id: \.offset) { _, section in
+                        VStack(alignment: .leading, spacing: 6) {
                             Text(section.title).tavernFont(.headline, weight: .semibold)
-                            MarkdownText(text: section.body)
+                            MarkdownText(text: section.body).tavernFont(.callout)
                         }
                     }
                 case .failure(let error):
                     Label(error.description, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                 }
+
+                Text(footer).tavernFont(.caption).foregroundStyle(.secondary)
             }
-            .padding(28)
-            .frame(maxWidth: 760, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: 720, alignment: .leading)
+        }
+        .sheet(isPresented: $running) {
+            if case .success(let document) = document {
+                SpellRunSheet(book: book, spell: spell, document: document, runID: book.openRun(for: spell.id)?.id)
+                    .environmentObject(model)
+            }
+        }
+        .task(id: spell.id) {
+            guard let store = model.store else { return }
+            lastCast = SpellCast.recent(store: store, since: Date().addingTimeInterval(-90 * 86_400))
+                .first { $0.spell == spell.id || $0.spell == spell.name }?.date
+        }
+    }
+
+    private var hasSteps: Bool {
+        if case .success(let document) = document { return !document.steps.isEmpty }
+        return false
+    }
+
+    private var actions: some View {
+        HStack(spacing: 8) {
+            let open = book.openRun(for: spell.id)
+            Button(open == nil ? "Start run…" : "Continue run (\(open!.checkedCount)/\(open!.stepCount))") { running = true }
+                .buttonStyle(PrimaryPillStyle())
+                .disabled(spell.gate == "blocked" || !hasSteps)
+                .help(spell.gate == "blocked" ? "Blocked: this spell can't be run yet" : "A checklist you tick off by hand")
+            if let url = book.fileURL(for: spell) {
+                Button("Open SKILL.md") { NSWorkspace.shared.open(url) }.buttonStyle(PillButtonStyle())
+            }
+            if let url = book.historyURL(for: spell) {
+                Button("History") { NSWorkspace.shared.open(url) }.buttonStyle(PillButtonStyle()).help(url.absoluteString)
+            }
+        }
+    }
+
+    private func facts(_ document: SpellDocument) -> some View {
+        let rows: [(String, String)] = [
+            ("When", document.section("When to use")?.body ?? spell.trigger),
+            ("Inputs", document.section("Inputs")?.body ?? ""),
+            ("Done when", document.section("Done when")?.body ?? ""),
+            ("Tools", document.section("Tools")?.body ?? ""),
+        ].filter { !$0.1.isEmpty }
+        return Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 18, verticalSpacing: 10) {
+            ForEach(rows, id: \.0) { row in
+                GridRow {
+                    Text(row.0).foregroundStyle(.secondary).gridColumnAlignment(.leading)
+                    Text(TranscriptRow.markdown(row.1)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+            }
+        }
+        .tavernFont(.callout)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func steps(_ document: SpellDocument) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Steps").tavernFont(.headline, weight: .semibold)
+            ForEach(Array(document.steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(index + 1).").foregroundStyle(.secondary).frame(minWidth: 18, alignment: .trailing)
+                    Text(TranscriptRow.markdown(step)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+            }
+        }
+        .tavernFont(.callout)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func permissionsBox(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Permissions (separate from steps)").tavernFont(.headline, weight: .semibold).foregroundStyle(.red)
+            Text(TranscriptRow.markdown(text)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+        .tavernFont(.callout)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.red.opacity(0.7), lineWidth: 1.5))
+    }
+
+    /// "Source: spellbook @ 4e1c9a2 · as of 6:02 PM · Last used: none yet · Next review: Fri Oct 23".
+    private var footer: String {
+        var parts = ["Source: spellbook @ \(book.snapshot?.commit ?? "?")"]
+        if let at = book.refreshedAt { parts.append("as of \(at.formatted(date: .omitted, time: .shortened))") }
+        let local = book.runs(of: spell.id).first?.startedAt
+        let used = [lastCast, local].compactMap { $0 }.max()
+        parts.append("Last used: \(used.map { $0.formatted(.relative(presentation: .named)) } ?? "none yet")")
+        parts.append("Next review: \(Self.nextFriday().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+        return parts.joined(separator: " · ")
+    }
+
+    /// The Friday review this spell next comes up in.
+    static func nextFriday(after date: Date = Date(), calendar: Calendar = .current) -> Date {
+        calendar.nextDate(after: date, matching: DateComponents(weekday: 6), matchingPolicy: .nextTime) ?? date
+    }
+}
+
+/// Running a spell by hand (mock 2). Before it starts: who it's for, the Linear issue, and whether
+/// to carry on into the spell it hands off to. Then each spell's steps take a tick and a note or
+/// evidence link. Tavern keeps the record and sends nothing.
+private struct SpellRunSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var book: SpellbookStore
+    let spell: Spell
+    let document: SpellDocument
+    @State var runID: String?
+    @State private var agentID: String?
+    @State private var issue: String?
+    @State private var chain = true
+    @State private var confirmGate = false
+
+    var body: some View {
+        Group {
+            if let runID, let run = book.run(id: runID) {
+                checklist(run)
+            } else {
+                start
+            }
+        }
+        .themedSurface()
+        .task { _ = try? await model.loadOpenIssues() }
+    }
+
+    // MARK: Start
+
+    private var members: [RosterMember] { model.roster.members.filter(spell.applies(to:)) }
+
+    private var start: some View {
+        let next = book.chained(after: spell, document: document)
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("Run · \(spell.id) \(spell.title)").tavernFont(.title3, weight: .semibold)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Who's doing it").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                FlowLayout(spacing: 6) {
+                    Button(model.roster.owner) { agentID = nil }.buttonStyle(PillButtonStyle(selected: agentID == nil))
+                    ForEach(members) { member in
+                        Button { agentID = member.id } label: {
+                            HStack(spacing: 6) { AvatarView(member: member, size: 20, hoverCard: false); Text(member.name) }
+                        }
+                        .buttonStyle(PillButtonStyle(selected: agentID == member.id))
+                    }
+                }
+            }
+            Picker("Issue", selection: $issue) {
+                Text("No issue").tag(String?.none)
+                ForEach(model.openIssues) { Text("\($0.identifier) \($0.title)").tag(Optional($0.identifier)) }
+            }
+            if let (next, _) = next {
+                Toggle("Then \(next.id) \(next.title)", isOn: $chain)
+            }
+            if spell.gate == "needs-paul" {
+                Label("Gated on \(model.roster.owner): start it only if you're giving that OK now.", systemImage: "hand.raised")
+                    .tavernFont(.callout).foregroundStyle(.red)
+            }
+            HStack {
+                Text("Tavern keeps the run record and sends nothing.").tavernFont(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Start run") {
+                    runID = book.startRun(spell, document: document, chain: chain, agentID: agentID, issue: issue, events: model.store)
+                }
+                .buttonStyle(PrimaryPillStyle())
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+    }
+
+    // MARK: Checklist
+
+    private func checklist(_ run: SpellRun) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Run · \(run.parts.first.map { "\($0.spellID) \($0.title)" } ?? "")\(run.issue.map { " · \($0)" } ?? "")")
+                .tavernFont(.title3, weight: .semibold)
+                .padding(.horizontal, 20).padding(.vertical, 14)
+            Divider()
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(run.parts.enumerated()), id: \.offset) { index, part in
+                    if index > 0 { Divider() }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text(index == 0 ? header(run) : "Then · \(part.spellID) \(part.title) · v\(part.version)")
+                                .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                            ForEach(Array(part.steps.enumerated()), id: \.offset) { step, text in
+                                StepCheck(text: text, checked: part.checked.contains(step), note: noteBinding(run, part: index, step: step)) {
+                                    var run = run
+                                    run.parts[index].toggle(step)
+                                    book.save(run)
+                                }
+                            }
+                            if let done = part.doneWhen, !done.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Done when").tavernFont(.caption, weight: .semibold)
+                                    Text(TranscriptRow.markdown(done)).tavernFont(.callout).foregroundStyle(.secondary)
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            if index == run.parts.count - 1 { buttons(run) }
+                        }
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if run.parts.count == 1 {
+                    // Keep the two-column shape: the right side holds the outcome actions.
+                    EmptyView()
+                }
+            }
+            Divider()
+            Text("The run record stays in Tavern. Tavern doesn't post, send or edit Linear for this run.")
+                .tavernFont(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 20).padding(.vertical, 10)
+        }
+        .frame(width: run.parts.count > 1 ? 980 : 600, height: 560)
+    }
+
+    private func header(_ run: SpellRun) -> String {
+        let number = book.runs(of: run.spellID).reversed().firstIndex { $0.id == run.id }.map { $0 + 1 } ?? 1
+        let who = run.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner
+        return (["Run \(number)", "by \(who)", run.startedAt.formatted(date: .omitted, time: .shortened)]
+            + (run.issue.map { ["issue \($0)"] } ?? [])).joined(separator: " · ")
+    }
+
+    private func noteBinding(_ run: SpellRun, part: Int, step: Int) -> Binding<String> {
+        Binding(
+            get: { book.run(id: run.id).flatMap { $0.parts[part].notes.indices.contains(step) ? $0.parts[part].notes[step] : nil } ?? "" },
+            set: { value in
+                guard var latest = book.run(id: run.id) else { return }
+                latest.parts[part].setNote(value, for: step)
+                book.save(latest)
+            }
+        )
+    }
+
+    private func buttons(_ run: SpellRun) -> some View {
+        HStack(spacing: 8) {
+            Button("Save and close") { dismiss() }.buttonStyle(PillButtonStyle())
+            Button("Copy run summary") {
+                NSPasteboard.general.clearContents()
+                let who = run.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner
+                NSPasteboard.general.setString(run.summary(by: who), forType: .string)
+            }
+            .buttonStyle(PillButtonStyle())
+            Button(run.allChecked ? "Finish" : "Finish anyway") {
+                var run = run
+                run.finishedAt = Date()
+                book.save(run)
+                dismiss()
+            }
+            .buttonStyle(PillButtonStyle(selected: run.allChecked))
+        }
+        .padding(.top, 4)
+    }
+}
+
+/// A step: a tick box, its text, and a note or evidence link under it.
+private struct StepCheck: View {
+    let text: String
+    let checked: Bool
+    @Binding var note: String
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(action: toggle) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: checked ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(checked ? Color.green : Color.secondary)
+                        .imageScale(.large)
+                    Text(TranscriptRow.markdown(text)).fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            TextField("Add a note or link", text: $note)
+                .textFieldStyle(.plain)
+                .tavernFont(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 2) }
+                .padding(.leading, 30)
         }
     }
 }
 
-/// The spells for one member, in their inspector. Each opens on the Spellbook page.
+/// What an agent has cast lately (its info panel's Activity tab): each spell, how often, when last.
+struct AgentSpellCasts: View {
+    let member: RosterMember
+    @ObservedObject var book: SpellbookStore
+    @EnvironmentObject private var model: AppModel
+    @State private var casts: [SpellCast] = []
+
+    private var grouped: [(spell: String, count: Int, last: Date)] {
+        Dictionary(grouping: casts, by: { book.spell($0.spell)?.id ?? $0.spell })
+            .map { (spell: $0.key, count: $0.value.count, last: $0.value.map(\.date).max() ?? .distantPast) }
+            .sorted { $0.last > $1.last }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Spells cast · 30 days").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+            if casts.isEmpty {
+                Text("None yet.").tavernFont(.callout).foregroundStyle(.secondary)
+            }
+            ForEach(grouped, id: \.spell) { item in
+                Button {
+                    NotificationCenter.default.post(name: .tavernOpenPage, object: Page.spellbook(spell: book.spell(item.spell)?.id ?? item.spell).storageKey)
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "book.closed").foregroundStyle(Color.tavernAccent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(book.spell(item.spell).map { "\($0.id) \($0.title)" } ?? item.spell)
+                                .tavernFont(.callout, weight: .medium).lineLimit(1)
+                            Text("\(item.count)× · last \(item.last.formatted(.relative(presentation: .named)))")
+                                .tavernFont(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .task(id: member.id) {
+            while !Task.isCancelled {
+                if let store = model.store {
+                    casts = SpellCast.recent(store: store, agentID: member.id, since: Date().addingTimeInterval(-30 * 86_400))
+                }
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+}
+
+/// The spells for one member (their info panel's About tab). Each opens on the Spellbook page.
 struct AgentSpellsSection: View {
     let member: RosterMember
     @ObservedObject var book: SpellbookStore
@@ -402,9 +844,9 @@ struct AgentSpellsSection: View {
         if book.repo != nil {
             let spells = book.snapshot?.spells(for: member) ?? []
             VStack(alignment: .leading, spacing: 8) {
-                Text("Spells").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                Text("Spells for \(member.name)").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
                 if spells.isEmpty {
-                    Text(book.snapshot == nil ? "Not loaded yet." : "None for \(member.name).").tavernFont(.callout).foregroundStyle(.secondary)
+                    Text(book.snapshot == nil ? "Not loaded yet." : "None.").tavernFont(.callout).foregroundStyle(.secondary)
                 }
                 ForEach(spells) { spell in
                     Button {
@@ -414,7 +856,6 @@ struct AgentSpellsSection: View {
                             Text(spell.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
                             Text(spell.title).tavernFont(.callout, weight: .medium).lineLimit(1)
                             Spacer(minLength: 0)
-                            GateBadge(gate: spell.gate)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
@@ -426,106 +867,40 @@ struct AgentSpellsSection: View {
     }
 }
 
-/// Starts a run for whoever the spell applies to, or for the owner. A blocked spell can't be run;
-/// one gated on the owner asks first.
-private struct RunButton: View {
+/// A spell an agent cast, inline in its chat: the spell's name, id and version, and its trigger,
+/// in the accent color, so it stands out from ordinary tool steps. Opens the spell.
+struct SpellCastCard: View {
+    let spell: String
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var book: SpellbookStore
-    let spell: Spell
-    let document: SpellDocument
-    @State private var pendingAgent: String??
-
-    private var members: [RosterMember] { model.roster.members.filter(spell.applies(to:)) }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Menu {
-                Button("For me") { request(nil) }
-                if !members.isEmpty { Divider() }
-                ForEach(members) { member in
-                    Button("For \(member.name)") { request(member.id) }
-                }
-            } label: {
-                Label("Run", systemImage: "play.fill")
-            } primaryAction: {
-                request(nil)
-            }
-            .menuStyle(.button)
-            .fixedSize()
-            .disabled(spell.gate == "blocked" || document.steps.isEmpty)
-            let past = book.runs.filter { $0.spellID == spell.id }
-            Text(spell.gate == "blocked" ? "Blocked: this spell can't be run yet."
-                 : document.steps.isEmpty ? "No numbered steps to check off."
-                 : past.first.map { "Run \(past.count)× · last \($0.startedAt.formatted(.relative(presentation: .named)))" } ?? "Turns the steps into a checklist.")
-                .tavernFont(.caption).foregroundStyle(.secondary)
-        }
-        .confirmationDialog("\(spell.citation) needs \(model.roster.owner)'s OK", isPresented: Binding(
-            get: { pendingAgent != nil }, set: { if !$0 { pendingAgent = nil } }
-        )) {
-            Button("Start the run") {
-                if let agent = pendingAgent { start(agent) }
-                pendingAgent = nil
-            }
-        } message: {
-            Text("This spell is gated on \(model.roster.owner). Start it only if you're giving that OK now.")
-        }
-    }
-
-    private func request(_ agentID: String?) {
-        if spell.gate == "needs-paul" { pendingAgent = .some(agentID) } else { start(agentID) }
-    }
-
-    private func start(_ agentID: String?) {
-        book.startRun(spell, document: document, agentID: agentID, events: model.store)
-    }
-}
-
-/// A run's checklist: tick steps by hand, then Finish. Evidence goes on the issue or thread.
-private struct SpellRunCard: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var book: SpellbookStore
-    let run: SpellRun
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Run · \(run.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner)")
-                    .tavernFont(.headline, weight: .semibold)
-                Spacer()
-                Text("\(run.checked.count)/\(run.steps.count)").monospacedDigit().foregroundStyle(.secondary)
-            }
-            ForEach(Array(run.steps.enumerated()), id: \.offset) { index, step in
-                Button { book.toggle(index, in: run) } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: run.checked.contains(index) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(run.checked.contains(index) ? Color.tavernAccent : Color.secondary)
-                        Text(TranscriptRow.markdown(step))
-                            .foregroundStyle(run.checked.contains(index) ? .secondary : .primary)
-                            .fixedSize(horizontal: false, vertical: true)
+        let found = model.spellbook.spell(spell)
+        Button {
+            NotificationCenter.default.post(name: .tavernOpenPage, object: Page.spellbook(spell: found?.id ?? spell).storageKey)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.tavernAccent)
+                    .frame(width: 34, height: 34)
+                    .background(Color.tavernAccent.opacity(0.15), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("Cast").tavernFont(.caption, weight: .semibold).foregroundStyle(Color.tavernAccent)
+                        Text(found.map(\.citation) ?? spell).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                    Text(found?.title ?? spell).tavernFont(.body, weight: .semibold)
+                    if let found { Text(found.trigger).tavernFont(.caption).foregroundStyle(.secondary).lineLimit(2) }
                 }
-                .buttonStyle(.plain)
+                Spacer(minLength: 0)
             }
-            if let done = run.doneWhen, !done.isEmpty {
-                Text("Done when: \(done)").tavernFont(.callout).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 8) {
-                Button(run.allChecked ? "Finish" : "Finish anyway") { book.finish(run) }
-                    .buttonStyle(PillButtonStyle(selected: run.allChecked))
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("\(run.citation)\(run.commit.map { " @ \($0)" } ?? "")", forType: .string)
-                } label: { Label("Copy citation", systemImage: "doc.on.doc") }
-                    .buttonStyle(PillButtonStyle())
-                Spacer()
-                Text("Started \(run.startedAt.formatted(.relative(presentation: .named)))").tavernFont(.caption).foregroundStyle(.tertiary)
-            }
+            .padding(12)
+            .frame(maxWidth: 520, alignment: .leading)
+            .background(Color.tavernAccent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.tavernAccent.opacity(0.35)))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.tavernAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.tavernAccent.opacity(0.3)))
+        .buttonStyle(.plain)
+        .help("Open \(found?.id ?? spell) in the Spellbook")
     }
 }

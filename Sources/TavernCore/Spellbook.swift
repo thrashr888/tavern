@@ -113,6 +113,15 @@ public struct SpellDocument: Equatable, Sendable {
         return steps
     }
 
+    /// The spell the steps hand off to ("…, then run SB-21"), if any.
+    public func chainedSpell(from id: String) -> String? {
+        let text = section("Steps")?.body ?? ""
+        let pattern = #"\b[Rr]un\s+(SB-\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        return matches.compactMap { Range($0.range(at: 1), in: text).map { String(text[$0]) } }.last { $0 != id }
+    }
+
     public static func parse(_ text: String) -> SpellDocument {
         var lines = text.components(separatedBy: .newlines)
         // Frontmatter: index.json already carries it.
@@ -298,43 +307,92 @@ public struct SpellbookRepo: Sendable {
     }
 }
 
-/// One manual run of a spell from Tavern: its steps as a checklist, ticked off by hand. Runs stay
-/// on this Mac; the evidence goes on the issue or thread, citing the spell as "SB-nn vN".
+/// One manual run of a spell from Tavern (mock 2): its steps as a checklist with a note or evidence
+/// link per step, tied to a Linear issue, and chained into the spell its steps hand off to (SB-20
+/// then SB-21). Runs stay on this Mac; Tavern posts, sends and edits nothing for a run.
 public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
+    /// One spell's checklist within the run.
+    public struct Part: Codable, Equatable, Sendable {
+        public var spellID: String
+        public var title: String
+        public var version: Int
+        public var steps: [String]
+        /// A note or evidence link per step, "" when none yet.
+        public var notes: [String]
+        /// Indexes into `steps`.
+        public var checked: [Int]
+        public var doneWhen: String?
+
+        public init(spell: Spell, document: SpellDocument) {
+            spellID = spell.id
+            title = spell.title
+            version = spell.version
+            steps = document.steps
+            notes = Array(repeating: "", count: document.steps.count)
+            checked = []
+            doneWhen = document.section("Done when")?.body
+        }
+
+        public var citation: String { "\(spellID) v\(version)" }
+        public var allChecked: Bool { Set(checked).isSuperset(of: steps.indices) }
+
+        public mutating func toggle(_ step: Int) {
+            if let index = checked.firstIndex(of: step) { checked.remove(at: index) } else { checked.append(step) }
+        }
+
+        public mutating func setNote(_ note: String, for step: Int) {
+            while notes.count < steps.count { notes.append("") }
+            guard notes.indices.contains(step) else { return }
+            notes[step] = note
+        }
+    }
+
     public var id: String
-    public var spellID: String
-    public var title: String
-    public var version: Int
+    /// The spell run first, then any it chains into.
+    public var parts: [Part]
     /// The spellbook commit the steps came from.
     public var commit: String?
-    /// Who the run is for: a roster member, or nil for the owner themself.
+    /// Who is doing the work: a roster member, or nil for the owner themself.
     public var agentID: String?
-    public var steps: [String]
-    public var doneWhen: String?
-    /// Indexes into `steps`.
-    public var checked: [Int]
+    /// The Linear issue the run is for ("PAUL-203").
+    public var issue: String?
     public var startedAt: Date
     public var finishedAt: Date?
 
-    public init(spell: Spell, document: SpellDocument, commit: String?, agentID: String?, startedAt: Date = Date()) {
+    public init(parts: [Part], commit: String?, agentID: String?, issue: String? = nil, startedAt: Date = Date()) {
         id = UUID().uuidString
-        spellID = spell.id
-        title = spell.title
-        version = spell.version
+        self.parts = parts
         self.commit = commit
         self.agentID = agentID
-        steps = document.steps
-        doneWhen = document.section("Done when")?.body
-        checked = []
+        self.issue = issue
         self.startedAt = startedAt
     }
 
-    public var citation: String { "\(spellID) v\(version)" }
-    public var isFinished: Bool { finishedAt != nil }
-    public var allChecked: Bool { Set(checked).isSuperset(of: steps.indices) }
+    public init(spell: Spell, document: SpellDocument, commit: String?, agentID: String?, issue: String? = nil, startedAt: Date = Date()) {
+        self.init(parts: [Part(spell: spell, document: document)], commit: commit, agentID: agentID, issue: issue, startedAt: startedAt)
+    }
 
-    public mutating func toggle(_ step: Int) {
-        if let index = checked.firstIndex(of: step) { checked.remove(at: index) } else { checked.append(step) }
+    public var spellID: String { parts.first?.spellID ?? "" }
+    public var title: String { parts.first?.title ?? "" }
+    /// "SB-20 v1 then SB-21 v1".
+    public var citation: String { parts.map(\.citation).joined(separator: " then ") }
+    public var isFinished: Bool { finishedAt != nil }
+    public var allChecked: Bool { parts.allSatisfy(\.allChecked) }
+    public var checkedCount: Int { parts.reduce(0) { $0 + $1.checked.count } }
+    public var stepCount: Int { parts.reduce(0) { $0 + $1.steps.count } }
+
+    /// Plain text for the issue or thread: the citation, then each step with its mark and note.
+    public func summary(by name: String) -> String {
+        var lines = ["\(name): run as \(citation)\(issue.map { " on \($0)" } ?? "")\(commit.map { " (spellbook @ \($0))" } ?? "")."]
+        for part in parts {
+            lines.append("")
+            lines.append("\(part.citation) \(part.title)")
+            for (index, step) in part.steps.enumerated() {
+                let note = part.notes.indices.contains(index) ? part.notes[index].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                lines.append("\(part.checked.contains(index) ? "[x]" : "[ ]") \(step)\(note.isEmpty ? "" : " — \(note)")")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Kind of the event a run start writes, so the Dashboard counts it with agents' casts.
@@ -345,8 +403,9 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
             "type": "tavern_spell_run",
             "runId": .string(id),
             "spellId": .string(spellID),
-            "version": .number(Double(version)),
+            "spells": .array(parts.map { .string($0.citation) }),
             "agent": agentID.map(JSONValue.string) ?? .null,
+            "issue": issue.map(JSONValue.string) ?? .null,
             "commit": commit.map(JSONValue.string) ?? .null,
         ]
         return TavernEvent(source: EventSource.tavern, sourceID: "spellrun:\(id)", threadKey: "spellbook",
@@ -382,5 +441,38 @@ public struct SpellRunStore: Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try encoder.encode(all).write(to: url, options: .atomic)
         return all.sorted { $0.startedAt > $1.startedAt }
+    }
+}
+
+/// A spell someone cast: an agent opening it through the spellbook server (`spellbook_get`), or a
+/// run started in Tavern.
+public struct SpellCast: Equatable, Identifiable, Sendable {
+    public var id: String
+    /// The spell's id, or its name when the call named it that way.
+    public var spell: String
+    public var agentID: String?
+    public var date: Date
+    public var fromTavern: Bool
+
+    /// Casts since `since`, newest first, optionally for one agent.
+    public static func recent(store: EventStore, agentID: String? = nil, since: Date) -> [SpellCast] {
+        var casts: [SpellCast] = []
+        for event in (try? store.events(source: EventSource.pi, since: since)) ?? [] where event.kind == "pi.message.assistant" {
+            let agent = String(event.threadKey.dropFirst("pi:".count))
+            if let agentID, agent != agentID { continue }
+            guard let json = try? JSONValue.decode(event.payload) else { continue }
+            for call in json["message"]?["content"]?.arrayValue ?? [] where call["type"]?.stringValue == "toolCall" {
+                guard let spell = ProofOfValue.spellOpened(name: call["name"]?.stringValue ?? "", arguments: call["arguments"] ?? .object([:])) else { continue }
+                casts.append(SpellCast(id: call["id"]?.stringValue ?? UUID().uuidString, spell: spell, agentID: agent,
+                                       date: event.sourceTS, fromTavern: false))
+            }
+        }
+        for event in (try? store.events(source: EventSource.tavern, since: since)) ?? [] where event.kind == SpellRun.eventKind {
+            guard let json = try? JSONValue.decode(event.payload), let spell = json["spellId"]?.stringValue else { continue }
+            let agent = json["agent"]?.stringValue
+            if let agentID, agent != agentID { continue }
+            casts.append(SpellCast(id: event.sourceID, spell: spell, agentID: agent, date: event.sourceTS, fromTavern: true))
+        }
+        return casts.sorted { $0.date > $1.date }
     }
 }

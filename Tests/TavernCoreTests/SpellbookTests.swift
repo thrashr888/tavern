@@ -128,13 +128,17 @@ final class SpellbookTests: XCTestCase {
         // Whole seconds: the store keeps ISO 8601 dates.
         let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
         var run = SpellRun(spell: spell, document: SpellDocument.parse(Self.skill), commit: "abc1234", agentID: "tally", startedAt: now)
-        XCTAssertEqual(run.steps.count, 3)
-        XCTAssertEqual(run.doneWhen, "The report names what was checked.")
-        run.toggle(0)
-        run.toggle(2)
-        run.toggle(0)
-        XCTAssertEqual(run.checked, [2])
+        XCTAssertEqual(run.parts[0].steps.count, 3)
+        XCTAssertEqual(run.parts[0].doneWhen, "The report names what was checked.")
+        run.parts[0].toggle(0)
+        run.parts[0].toggle(2)
+        run.parts[0].toggle(0)
+        run.parts[0].setNote("https://example.com/sent", for: 2)
+        XCTAssertEqual(run.parts[0].checked, [2])
         XCTAssertFalse(run.allChecked)
+        XCTAssertEqual(run.checkedCount, 1)
+        XCTAssertEqual(run.stepCount, 3)
+        XCTAssertTrue(run.summary(by: "Tally").contains("[x] Report what is verified. — https://example.com/sent"))
 
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("runs-\(UUID()).json")
         let runs = SpellRunStore(url: url)
@@ -147,5 +151,28 @@ final class SpellbookTests: XCTestCase {
         _ = try store.append([run.startEvent])
         let pov = ProofOfValue(store: store, now: now)
         XCTAssertEqual(pov.spells, [ProofOfValue.ToolUse(name: "SB-21", count: 1)])
+    }
+
+    func testChainedSpellIsTheLastOtherSpellTheStepsRun() {
+        let document = SpellDocument.parse("""
+        # Weekly update
+
+        ## Steps
+
+        1. Draft it.
+        2. Run SB-20 on the draft, then run SB-21 to check delivery.
+        """)
+        XCTAssertEqual(document.chainedSpell(from: "SB-20"), "SB-21")
+        XCTAssertNil(SpellDocument.parse(Self.skill).chainedSpell(from: "SB-21"))
+    }
+
+    func testCastsCountRunsStartedInTavernPerAgent() throws {
+        let spell = try XCTUnwrap(try SpellIndex.parse(Data(Self.indexJSON.utf8)).spells.last)
+        let store = try EventStore(path: FileManager.default.temporaryDirectory.appendingPathComponent("casts-\(UUID()).sqlite").path)
+        let run = SpellRun(spell: spell, document: SpellDocument.parse(Self.skill), commit: nil, agentID: "tally")
+        _ = try store.append([run.startEvent])
+        let since = Date().addingTimeInterval(-60)
+        XCTAssertEqual(SpellCast.recent(store: store, agentID: "tally", since: since).map(\.spell), ["SB-21"])
+        XCTAssertEqual(SpellCast.recent(store: store, agentID: "ember", since: since), [])
     }
 }

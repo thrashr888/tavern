@@ -36,18 +36,33 @@ final class Decisions: ObservableObject {
     }
 }
 
-/// A "Suggested: …" chip. Tapping applies it; it never applies itself.
+/// A suggestion chip (mock 5): "Spell  SB-20 Weekly update  0.86". Tapping applies it; it never
+/// applies itself. Dashed for a follow-on ("then SB-21") that's offered, not picked.
 struct SuggestionChip: View {
-    let text: String
+    let label: String
+    let value: String
+    var confidence: Double? = nil
+    var dashed = false
     var help: String? = nil
     let apply: () -> Void
 
     var body: some View {
         Button(action: apply) {
-            Label(text, systemImage: "sparkles")
-                .tavernFont(.caption, weight: .semibold)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color.tavernAccent.opacity(0.18), in: Capsule())
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").imageScale(.small).foregroundStyle(Color.tavernAccent)
+                Text(label).tavernFont(.caption).foregroundStyle(.secondary)
+                Text(value).tavernFont(.caption, weight: .semibold).lineLimit(1)
+                if let confidence {
+                    Text(String(format: "%.2f", confidence))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(dashed ? Color.clear : Color.tavernAccent.opacity(0.14), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.tavernAccent.opacity(dashed ? 0.6 : 0.35),
+                                            style: StrokeStyle(lineWidth: 1, dash: dashed ? [3, 3] : [])))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help(help ?? "A decision model's suggestion; tap to use it")

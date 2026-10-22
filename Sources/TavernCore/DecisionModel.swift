@@ -261,3 +261,12 @@ public enum DecisionSuggestions {
                            sourceTS: date, receivedTS: date, kind: eventKind, payload: (try? payload.encoded()) ?? Data())
     }
 }
+
+extension DecisionSuggestions {
+    /// One question's options by probability, "none" left out, for chips with numbers and "Did you mean".
+    public static func ranked(_ id: String, in answers: [String: DecisionAnswer]) -> [(key: String, probability: Double)] {
+        guard case .choice(_, let probabilities, _)? = answers[id] else { return [] }
+        return probabilities.filter { $0.key != none }.map { (key: $0.key, probability: $0.value) }
+            .sorted { $0.probability > $1.probability }
+    }
+}

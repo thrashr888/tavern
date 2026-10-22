@@ -176,6 +176,14 @@ struct SearchPalette: View {
     }
 
     /// Spells by id, title or trigger; retired ones only by their id.
+    /// "Wololo · Live", or "mentions <query>" when only the description matched (mock 3).
+    private func spellDetail(_ spell: Spell, needle: String) -> String {
+        let named = [spell.id, spell.title].contains { $0.lowercased().contains(needle) }
+        if !named, !needle.isEmpty { return "mentions \"\(needle)\"" }
+        let owner = spell.owner.map { model.roster.member(id: $0)?.name ?? $0.capitalized }
+        return [owner, spell.lifecycle.capitalized].compactMap { $0 }.joined(separator: " · ")
+    }
+
     private func spellResults(_ text: String) -> [Result] {
         let needle = text.lowercased().trimmingCharacters(in: .whitespaces)
         return (model.spellbook.snapshot?.spells ?? []).filter { spell in
@@ -184,7 +192,7 @@ struct SearchPalette: View {
         }.map { spell in
             Result(id: "spell:\(spell.id)", scope: .spells, icon: spell.isRitual ? "repeat" : "book.closed",
                    title: "\(spell.id) \(spell.title)",
-                   detail: [spell.trigger, spell.lifecycle == "live" ? nil : spell.lifecycle.capitalized].compactMap { $0 }.joined(separator: " · "),
+                   detail: spellDetail(spell, needle: needle),
                    page: .spellbook(spell: spell.id))
         }
     }
