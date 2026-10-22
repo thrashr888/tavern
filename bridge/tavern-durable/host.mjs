@@ -18,6 +18,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Approvals, approvalExtension } from "./approvals.mjs";
 import { ASK_PREFIX, askExtension } from "./ask.mjs";
+import { Judge } from "./judge.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -53,7 +54,10 @@ const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
 // Tavern's own tools (the home agent's "tavern" server) ask the user in Tavern itself.
 const asksItself = (name) => name.startsWith("tavern__");
 const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name) && !asksItself(tool.name)).map((tool) => tool.name));
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), askExtension(approvals), mcp];
+// A decision model lets routine calls run unasked (judge.mjs); the agent's own folders are routine.
+const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_WORKSPACE, log });
+const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
   if (!/No durable session exists/.test(String(error?.message))) throw error;
