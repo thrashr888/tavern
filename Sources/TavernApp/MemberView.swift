@@ -53,8 +53,7 @@ struct MemberView: View {
             .inspector(isPresented: $showInspector) {
                 MemberInspector(member: member, selection: $selection)
                     .inspectorClose($showInspector)
-                    .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
-                    .splitAutosave("inspector")
+                    .rememberedInspectorWidth(260...440)
             }
         } else {
             Text("No party member \(memberID)").foregroundStyle(.secondary)

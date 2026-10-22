@@ -780,8 +780,7 @@ struct AgentThreadView: View {
             if let agent {
                 AgentInspectorView(agent: agent)
                     .inspectorClose($showInspector)
-                    .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
-                    .splitAutosave("inspector")
+                    .rememberedInspectorWidth(260...440)
             }
         }
     }

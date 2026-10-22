@@ -14,13 +14,7 @@ struct ServicesView: View {
     private var hosts: [DockerHost] { DockerHost.hosts(for: model.roster) }
 
     var body: some View {
-        HSplitView {
-            list
-                .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
-                .splitAutosave("services")
-            detail
-                .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
-        }
+        ResizablePane("services.list", ideal: 320, range: 240...520) { list } rest: { detail }
         .navigationTitle("Services")
         .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await refresh() } }
         .onChange(of: model.focusedService) { _, focus in

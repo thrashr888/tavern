@@ -57,10 +57,8 @@ struct GoalsView: View {
             } else if issues.isEmpty && loading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
-                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260).splitAutosave("goals")
-                    issueList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
-                    detail.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                ResizablePane("goals.filters", ideal: 210, range: 170...320) { filters } rest: {
+                    ResizablePane("goals.list", ideal: 380, range: 260...640) { issueList } rest: { detail }
                 }
             }
         }
