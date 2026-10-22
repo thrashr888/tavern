@@ -122,4 +122,30 @@ final class SpellbookTests: XCTestCase {
         let spell = Spell(id: "SB-1", name: "x", title: "X", description: "X.", path: "../roster.json")
         XCTAssertThrowsError(try repo.document(for: spell))
     }
+
+    func testRunsChecklistSaveAndCountAsCasts() throws {
+        let spell = try XCTUnwrap(try SpellIndex.parse(Data(Self.indexJSON.utf8)).spells.last)
+        // Whole seconds: the store keeps ISO 8601 dates.
+        let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+        var run = SpellRun(spell: spell, document: SpellDocument.parse(Self.skill), commit: "abc1234", agentID: "tally", startedAt: now)
+        XCTAssertEqual(run.steps.count, 3)
+        XCTAssertEqual(run.doneWhen, "The report names what was checked.")
+        run.toggle(0)
+        run.toggle(2)
+        run.toggle(0)
+        XCTAssertEqual(run.checked, [2])
+        XCTAssertFalse(run.allChecked)
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("runs-\(UUID()).json")
+        let runs = SpellRunStore(url: url)
+        try runs.save(run)
+        run.finishedAt = now
+        try runs.save(run)
+        XCTAssertEqual(runs.load(), [run])
+
+        let store = try EventStore(path: FileManager.default.temporaryDirectory.appendingPathComponent("runs-\(UUID()).sqlite").path)
+        _ = try store.append([run.startEvent])
+        let pov = ProofOfValue(store: store, now: now)
+        XCTAssertEqual(pov.spells, [ProofOfValue.ToolUse(name: "SB-21", count: 1)])
+    }
 }

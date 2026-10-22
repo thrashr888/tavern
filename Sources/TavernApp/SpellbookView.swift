@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TavernCore
 
@@ -10,7 +11,44 @@ final class SpellbookStore: ObservableObject {
     @Published private(set) var syncing = false
     @Published private(set) var refreshedAt: Date?
     @Published private(set) var repo: SpellbookRepo?
+    /// Runs started here, newest first (slice 2: manual checklists).
+    @Published private(set) var runs: [SpellRun] = []
+    @Published private(set) var runError: String?
     private var documents: [String: SpellDocument] = [:]
+    private let runStore = SpellRunStore.defaultURL().map(SpellRunStore.init(url:))
+
+    init() { runs = runStore?.load() ?? [] }
+
+    /// The newest unfinished run of a spell.
+    func openRun(for spellID: String) -> SpellRun? { runs.first { $0.spellID == spellID && !$0.isFinished } }
+
+    /// Starts a checklist from the spell's steps, and logs the start so it counts as a cast.
+    func startRun(_ spell: Spell, document: SpellDocument, agentID: String?, events: EventStore?) {
+        let run = SpellRun(spell: spell, document: document, commit: snapshot?.commit, agentID: agentID)
+        save(run)
+        _ = try? events?.append([run.startEvent])
+    }
+
+    func toggle(_ step: Int, in run: SpellRun) {
+        var run = run
+        run.toggle(step)
+        save(run)
+    }
+
+    func finish(_ run: SpellRun) {
+        var run = run
+        run.finishedAt = Date()
+        save(run)
+    }
+
+    private func save(_ run: SpellRun) {
+        do {
+            runs = try runStore?.save(run) ?? runs
+            runError = nil
+        } catch {
+            runError = "Couldn't save the run: \(error.localizedDescription)"
+        }
+    }
 
     /// Points at the roster's repo and shows what's already on disk.
     func configure(roster: Roster) async {
@@ -217,7 +255,7 @@ struct SpellbookView: View {
     @ViewBuilder
     private var detail: some View {
         if let spellID, let spell = book.snapshot?.spell(id: spellID) {
-            SpellDetail(spell: spell, document: book.document(for: spell), asOf: book.asOf, page: $page)
+            SpellDetail(book: book, spell: spell, document: book.document(for: spell), asOf: book.asOf, page: $page)
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "book.closed").font(.system(size: 34)).foregroundStyle(.tertiary)
@@ -277,6 +315,7 @@ struct GateBadge: View {
 
 private struct SpellDetail: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject var book: SpellbookStore
     let spell: Spell
     let document: Result<SpellDocument, SpellbookError>
     let asOf: String?
@@ -297,6 +336,15 @@ private struct SpellDetail: View {
                     }
                     Text(spell.trigger).foregroundStyle(.secondary)
                 }
+
+                if case .success(let document) = document {
+                    if let run = book.openRun(for: spell.id) {
+                        SpellRunCard(book: book, run: run)
+                    } else {
+                        RunButton(book: book, spell: spell, document: document)
+                    }
+                }
+                if let error = book.runError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
 
                 InfoCard(title: spell.isRitual ? "Ritual" : "Spell") {
                     InfoRow(label: "ID", value: spell.citation, monospaced: true, copyable: true)
@@ -355,5 +403,109 @@ struct AgentSpellsSection: View {
                 }
             }
         }
+    }
+}
+
+/// Starts a run for whoever the spell applies to, or for the owner. A blocked spell can't be run;
+/// one gated on the owner asks first.
+private struct RunButton: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var book: SpellbookStore
+    let spell: Spell
+    let document: SpellDocument
+    @State private var pendingAgent: String??
+
+    private var members: [RosterMember] { model.roster.members.filter(spell.applies(to:)) }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Menu {
+                Button("For me") { request(nil) }
+                if !members.isEmpty { Divider() }
+                ForEach(members) { member in
+                    Button("For \(member.name)") { request(member.id) }
+                }
+            } label: {
+                Label("Run", systemImage: "play.fill")
+            } primaryAction: {
+                request(nil)
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .disabled(spell.gate == "blocked" || document.steps.isEmpty)
+            let past = book.runs.filter { $0.spellID == spell.id }
+            Text(spell.gate == "blocked" ? "Blocked: this spell can't be run yet."
+                 : document.steps.isEmpty ? "No numbered steps to check off."
+                 : past.first.map { "Run \(past.count)× · last \($0.startedAt.formatted(.relative(presentation: .named)))" } ?? "Turns the steps into a checklist.")
+                .tavernFont(.caption).foregroundStyle(.secondary)
+        }
+        .confirmationDialog("\(spell.citation) needs \(model.roster.owner)'s OK", isPresented: Binding(
+            get: { pendingAgent != nil }, set: { if !$0 { pendingAgent = nil } }
+        )) {
+            Button("Start the run") {
+                if let agent = pendingAgent { start(agent) }
+                pendingAgent = nil
+            }
+        } message: {
+            Text("This spell is gated on \(model.roster.owner). Start it only if you're giving that OK now.")
+        }
+    }
+
+    private func request(_ agentID: String?) {
+        if spell.gate == "needs-paul" { pendingAgent = .some(agentID) } else { start(agentID) }
+    }
+
+    private func start(_ agentID: String?) {
+        book.startRun(spell, document: document, agentID: agentID, events: model.store)
+    }
+}
+
+/// A run's checklist: tick steps by hand, then Finish. Evidence goes on the issue or thread.
+private struct SpellRunCard: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var book: SpellbookStore
+    let run: SpellRun
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Run · \(run.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner)")
+                    .tavernFont(.headline, weight: .semibold)
+                Spacer()
+                Text("\(run.checked.count)/\(run.steps.count)").monospacedDigit().foregroundStyle(.secondary)
+            }
+            ForEach(Array(run.steps.enumerated()), id: \.offset) { index, step in
+                Button { book.toggle(index, in: run) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: run.checked.contains(index) ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(run.checked.contains(index) ? Color.tavernAccent : Color.secondary)
+                        Text(TranscriptRow.markdown(step))
+                            .foregroundStyle(run.checked.contains(index) ? .secondary : .primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if let done = run.doneWhen, !done.isEmpty {
+                Text("Done when: \(done)").tavernFont(.callout).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button(run.allChecked ? "Finish" : "Finish anyway") { book.finish(run) }
+                    .buttonStyle(PillButtonStyle(selected: run.allChecked))
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("\(run.citation)\(run.commit.map { " @ \($0)" } ?? "")", forType: .string)
+                } label: { Label("Copy citation", systemImage: "doc.on.doc") }
+                    .buttonStyle(PillButtonStyle())
+                Spacer()
+                Text("Started \(run.startedAt.formatted(.relative(presentation: .named)))").tavernFont(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.tavernAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.tavernAccent.opacity(0.3)))
     }
 }

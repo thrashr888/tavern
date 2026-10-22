@@ -297,3 +297,90 @@ public struct SpellbookRepo: Sendable {
         }.value
     }
 }
+
+/// One manual run of a spell from Tavern: its steps as a checklist, ticked off by hand. Runs stay
+/// on this Mac; the evidence goes on the issue or thread, citing the spell as "SB-nn vN".
+public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var spellID: String
+    public var title: String
+    public var version: Int
+    /// The spellbook commit the steps came from.
+    public var commit: String?
+    /// Who the run is for: a roster member, or nil for the owner themself.
+    public var agentID: String?
+    public var steps: [String]
+    public var doneWhen: String?
+    /// Indexes into `steps`.
+    public var checked: [Int]
+    public var startedAt: Date
+    public var finishedAt: Date?
+
+    public init(spell: Spell, document: SpellDocument, commit: String?, agentID: String?, startedAt: Date = Date()) {
+        id = UUID().uuidString
+        spellID = spell.id
+        title = spell.title
+        version = spell.version
+        self.commit = commit
+        self.agentID = agentID
+        steps = document.steps
+        doneWhen = document.section("Done when")?.body
+        checked = []
+        self.startedAt = startedAt
+    }
+
+    public var citation: String { "\(spellID) v\(version)" }
+    public var isFinished: Bool { finishedAt != nil }
+    public var allChecked: Bool { Set(checked).isSuperset(of: steps.indices) }
+
+    public mutating func toggle(_ step: Int) {
+        if let index = checked.firstIndex(of: step) { checked.remove(at: index) } else { checked.append(step) }
+    }
+
+    /// Kind of the event a run start writes, so the Dashboard counts it with agents' casts.
+    public static let eventKind = "tavern.spell.run"
+
+    public var startEvent: TavernEvent {
+        let payload: JSONValue = [
+            "type": "tavern_spell_run",
+            "runId": .string(id),
+            "spellId": .string(spellID),
+            "version": .number(Double(version)),
+            "agent": agentID.map(JSONValue.string) ?? .null,
+            "commit": commit.map(JSONValue.string) ?? .null,
+        ]
+        return TavernEvent(source: EventSource.tavern, sourceID: "spellrun:\(id)", threadKey: "spellbook",
+                           authorAgent: "paul", sourceTS: startedAt, receivedTS: startedAt, kind: Self.eventKind,
+                           payload: (try? payload.encoded()) ?? Data())
+    }
+}
+
+/// Spell runs, in spell-runs.json beside the roster.
+public struct SpellRunStore: Sendable {
+    public let url: URL
+
+    public init(url: URL) { self.url = url }
+
+    public static func defaultURL() -> URL? { TavernPaths.file("spell-runs.json") }
+
+    /// Newest first.
+    public func load() -> [SpellRun] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return ((try? decoder.decode([SpellRun].self, from: data)) ?? []).sorted { $0.startedAt > $1.startedAt }
+    }
+
+    /// Adds or replaces a run by id.
+    @discardableResult
+    public func save(_ run: SpellRun) throws -> [SpellRun] {
+        var all = load().filter { $0.id != run.id }
+        all.insert(run, at: 0)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try encoder.encode(all).write(to: url, options: .atomic)
+        return all.sorted { $0.startedAt > $1.startedAt }
+    }
+}
