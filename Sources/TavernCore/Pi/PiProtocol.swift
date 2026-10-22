@@ -29,6 +29,8 @@ public enum PiCommand: Equatable, Sendable {
     case readCard(server: String, uri: String)
     /// A card's button calling a tool on its own server (after the user agreed).
     case callCardTool(server: String, name: String, arguments: JSONValue)
+    /// A durable host's heartbeat checks, dry run: what's new, without waking the agent.
+    case heartbeatCheck
 
     public var type: String {
         switch self {
@@ -45,6 +47,7 @@ public enum PiCommand: Equatable, Sendable {
         case .event: return "event"
         case .readCard: return "read_card"
         case .callCardTool: return "call_card_tool"
+        case .heartbeatCheck: return "heartbeat_check"
         }
     }
 
@@ -85,7 +88,7 @@ public enum PiCommand: Equatable, Sendable {
             object["server"] = .string(server)
             object["name"] = .string(name)
             object["arguments"] = arguments
-        case .abort, .compact, .getState, .getSessionStats, .getAvailableModels:
+        case .abort, .compact, .getState, .getSessionStats, .getAvailableModels, .heartbeatCheck:
             break
         }
         return .object(object)

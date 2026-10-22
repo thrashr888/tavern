@@ -296,6 +296,18 @@ public final class PiAgentSession: ObservableObject {
     }
     public func compact() async { await run(.compact) }
 
+    /// The host's heartbeat checks, dry run: "3 new", "nothing new" or the errors. Nil without a
+    /// connection.
+    public func heartbeatCheck() async -> String? {
+        var summary: String?
+        let ok = await run(.heartbeatCheck) { response in
+            let found = response.data?["found"]?.arrayValue?.count ?? 0
+            let errors = response.data?["errors"]?.arrayValue?.compactMap { $0["error"]?.stringValue } ?? []
+            summary = errors.isEmpty ? (found == 0 ? "Nothing new" : "\(found) new") : errors.joined(separator: "; ")
+        }
+        return ok ? (summary ?? "No checks for this agent") : nil
+    }
+
     /// Hands the agent an outside happening (durable hosts only); the host runs each `key` once.
     public func deliverEvent(source: String, text: String, key: String) async {
         guard config.durable else { return }
