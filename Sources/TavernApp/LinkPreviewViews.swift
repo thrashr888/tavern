@@ -43,11 +43,8 @@ struct LinkChipRow: View {
     var trailing = false
 
     var body: some View {
-        if trailing {
-            HStack(spacing: 6) { chips }
-        } else {
-            FlowLayout { chips }
-        }
+        // Wraps within the message column however many links there are.
+        FlowLayout(trailing: trailing) { chips }
     }
 
     private var chips: some View {
