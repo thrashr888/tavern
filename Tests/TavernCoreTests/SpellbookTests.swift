@@ -139,6 +139,13 @@ final class SpellbookTests: XCTestCase {
         XCTAssertEqual(run.checkedCount, 1)
         XCTAssertEqual(run.stepCount, 3)
         XCTAssertTrue(run.summary(by: "Tally").contains("[x] Report what is verified. — https://example.com/sent"))
+        let cast = SpellRun(spell: spell, document: SpellDocument.parse(Self.skill), commit: nil, agentID: "tally",
+                            issue: "PAUL-9", message: "  Check the Drive link too.\n")
+        XCTAssertEqual(cast.message, "Check the Drive link too.")
+        XCTAssertTrue(cast.agentPrompt.hasPrefix("Please cast SB-21 v1: Delivery verification."))
+        XCTAssertTrue(cast.agentPrompt.contains("spellbook_get (SB-21)"))
+        XCTAssertTrue(cast.agentPrompt.hasSuffix("Check the Drive link too."))
+        XCTAssertNil(SpellRun(spell: spell, document: SpellDocument.parse(Self.skill), commit: nil, agentID: nil, message: " ").message)
 
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("runs-\(UUID()).json")
         let runs = SpellRunStore(url: url)

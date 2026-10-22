@@ -356,15 +356,19 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
     public var agentID: String?
     /// The Linear issue the run is for ("PAUL-203").
     public var issue: String?
+    /// What the caster added when casting ("use the Q3 numbers").
+    public var message: String?
     public var startedAt: Date
     public var finishedAt: Date?
 
-    public init(parts: [Part], commit: String?, agentID: String?, issue: String? = nil, startedAt: Date = Date()) {
+    public init(parts: [Part], commit: String?, agentID: String?, issue: String? = nil, message: String? = nil, startedAt: Date = Date()) {
         id = UUID().uuidString
         self.parts = parts
         self.commit = commit
         self.agentID = agentID
         self.issue = issue
+        let message = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.message = message?.isEmpty == false ? message : nil
         self.startedAt = startedAt
     }
 
@@ -383,7 +387,8 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
 
     /// Plain text for the issue or thread: the citation, then each step with its mark and note.
     public func summary(by name: String) -> String {
-        var lines = ["\(name): run as \(citation)\(issue.map { " on \($0)" } ?? "")\(commit.map { " (spellbook @ \($0))" } ?? "")."]
+        var lines = ["\(name): cast \(citation)\(issue.map { " on \($0)" } ?? "")\(commit.map { " (spellbook @ \($0))" } ?? "")."]
+        if let message { lines.append(message) }
         for part in parts {
             lines.append("")
             lines.append("\(part.citation) \(part.title)")
@@ -392,6 +397,16 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
                 lines.append("\(part.checked.contains(index) ? "[x]" : "[ ]") \(step)\(note.isEmpty ? "" : " — \(note)")")
             }
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// What an agent is sent when someone casts a spell for it: read the spell through the
+    /// spellbook server, then follow it, citing the version.
+    public var agentPrompt: String {
+        var lines = ["Please cast \(citation): \(parts.map(\.title).joined(separator: ", then "))."]
+        lines.append("Read \(parts.count == 1 ? "it" : "each") with spellbook_get (\(parts.map(\.spellID).joined(separator: ", "))) and follow the steps; cite the version in your report.")
+        if let issue { lines.append("Issue: \(issue)") }
+        if let message { lines.append("\n" + message) }
         return lines.joined(separator: "\n")
     }
 
@@ -406,6 +421,7 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
             "spells": .array(parts.map { .string($0.citation) }),
             "agent": agentID.map(JSONValue.string) ?? .null,
             "issue": issue.map(JSONValue.string) ?? .null,
+            "message": message.map(JSONValue.string) ?? .null,
             "commit": commit.map(JSONValue.string) ?? .null,
         ]
         return TavernEvent(source: EventSource.tavern, sourceID: "spellrun:\(id)", threadKey: "spellbook",

@@ -56,12 +56,13 @@ final class SpellbookStore: ObservableObject {
     /// Starts a checklist from the spell's steps (and the spell it chains into), and logs the start
     /// so it counts as a cast. Returns the run's id.
     @discardableResult
-    func startRun(_ spell: Spell, document: SpellDocument, chain: Bool, agentID: String?, issue: String?, events: EventStore?) -> String {
+    func startRun(_ spell: Spell, document: SpellDocument, chain: Bool, agentID: String?, issue: String?, message: String? = nil,
+                  events: EventStore?) -> String {
         var parts = [SpellRun.Part(spell: spell, document: document)]
         if chain, let (next, nextDocument) = chained(after: spell, document: document) {
             parts.append(SpellRun.Part(spell: next, document: nextDocument))
         }
-        let run = SpellRun(parts: parts, commit: snapshot?.commit, agentID: agentID, issue: issue)
+        let run = SpellRun(parts: parts, commit: snapshot?.commit, agentID: agentID, issue: issue, message: message)
         save(run)
         _ = try? events?.append([run.startEvent])
         return run.id
@@ -626,10 +627,10 @@ private struct SpellDetail: View {
     private var actions: some View {
         HStack(spacing: 8) {
             let open = book.openRun(for: spell.id)
-            Button(open == nil ? "Start run…" : "Continue run (\(open!.checkedCount)/\(open!.stepCount))") { running = true }
+            Button(open == nil ? "Cast…" : "Continue cast (\(open!.checkedCount)/\(open!.stepCount))") { running = true }
                 .buttonStyle(PrimaryPillStyle())
                 .disabled(spell.gate == "blocked" || !hasSteps)
-                .help(spell.gate == "blocked" ? "Blocked: this spell can't be run yet" : "A checklist you tick off by hand")
+                .help(spell.gate == "blocked" ? "Blocked: this spell can't be cast yet" : "Cast it yourself as a checklist, or send it to an agent")
             if let url = book.fileURL(for: spell) {
                 Button("Open SKILL.md") { NSWorkspace.shared.open(url) }.buttonStyle(PillButtonStyle())
             }
@@ -717,6 +718,9 @@ private struct SpellRunSheet: View {
     @State private var agentID: String?
     @State private var issue: String?
     @State private var chain = true
+    @State private var message = ""
+    /// Send the cast to the agent's thread, so the agent does the steps itself.
+    @State private var sendToAgent = true
     @State private var confirmGate = false
 
     var body: some View {
@@ -738,7 +742,7 @@ private struct SpellRunSheet: View {
     private var start: some View {
         let next = book.chained(after: spell, document: document)
         return VStack(alignment: .leading, spacing: 14) {
-            Text("Run · \(spell.id) \(spell.title)").tavernFont(.title3, weight: .semibold)
+            Text("Cast · \(spell.id) \(spell.title)").tavernFont(.title3, weight: .semibold)
             VStack(alignment: .leading, spacing: 8) {
                 Text("Who's doing it").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
                 FlowLayout(spacing: 6) {
@@ -758,17 +762,31 @@ private struct SpellRunSheet: View {
             if let (next, _) = next {
                 Toggle("Then \(next.id) \(next.title)", isOn: $chain)
             }
+            TextEditor(text: $message)
+                .font(.body)
+                .frame(height: 80)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topLeading) {
+                    if message.isEmpty {
+                        Text("Add a message (optional)").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false)
+                    }
+                }
+            if let member = agent, member.kind == .pi {
+                Toggle("Send it to \(member.name) to do now", isOn: $sendToAgent)
+                    .disabled(model.session(for: member.id) == nil)
+            }
             if spell.gate == "needs-paul" {
                 Label("Gated on \(model.roster.owner): start it only if you're giving that OK now.", systemImage: "hand.raised")
                     .tavernFont(.callout).foregroundStyle(.red)
             }
             HStack {
-                Text("Tavern keeps the run record and sends nothing.").tavernFont(.caption).foregroundStyle(.secondary)
+                Text(sending ? "Sends the spell and your message to \(agent?.name ?? "")'s thread." : "Tavern keeps the record and sends nothing.")
+                    .tavernFont(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Start run") {
-                    runID = book.startRun(spell, document: document, chain: chain, agentID: agentID, issue: issue, events: model.store)
-                }
+                Button("Cast") { cast() }
                 .buttonStyle(PrimaryPillStyle())
                 .keyboardShortcut(.defaultAction)
             }
@@ -777,11 +795,29 @@ private struct SpellRunSheet: View {
         .frame(width: 560)
     }
 
+    private var agent: RosterMember? { agentID.flatMap { model.roster.member(id: $0) } }
+
+    private var sending: Bool {
+        guard let agent, agent.kind == .pi, model.session(for: agent.id) != nil else { return false }
+        return sendToAgent
+    }
+
+    /// Keeps the record; sent to an agent, the agent does the steps and the sheet closes.
+    private func cast() {
+        let id = book.startRun(spell, document: document, chain: chain, agentID: agentID, issue: issue, message: message, events: model.store)
+        guard sending, let agentID, let session = model.session(for: agentID), let run = book.run(id: id) else {
+            runID = id
+            return
+        }
+        Task { await session.send(run.agentPrompt) }
+        dismiss()
+    }
+
     // MARK: Checklist
 
     private func checklist(_ run: SpellRun) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Run · \(run.parts.first.map { "\($0.spellID) \($0.title)" } ?? "")\(run.issue.map { " · \($0)" } ?? "")")
+            Text("Cast · \(run.parts.first.map { "\($0.spellID) \($0.title)" } ?? "")\(run.issue.map { " · \($0)" } ?? "")")
                 .tavernFont(.title3, weight: .semibold)
                 .padding(.horizontal, 20).padding(.vertical, 14)
             Divider()
@@ -792,6 +828,9 @@ private struct SpellRunSheet: View {
                         VStack(alignment: .leading, spacing: 14) {
                             Text(index == 0 ? header(run) : "Then · \(part.spellID) \(part.title) · v\(part.version)")
                                 .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                            if index == 0, let message = run.message {
+                                Text(TranscriptRow.markdown(message)).tavernFont(.callout).foregroundStyle(.secondary)
+                            }
                             ForEach(Array(part.steps.enumerated()), id: \.offset) { step, text in
                                 StepCheck(text: text, checked: part.checked.contains(step), note: noteBinding(run, part: index, step: step)) {
                                     var run = run
@@ -820,7 +859,7 @@ private struct SpellRunSheet: View {
                 }
             }
             Divider()
-            Text("The run record stays in Tavern. Tavern doesn't post, send or edit Linear for this run.")
+            Text("The record stays in Tavern. Tavern doesn't post, send or edit Linear for this cast.")
                 .tavernFont(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 20).padding(.vertical, 10)
         }
@@ -830,7 +869,7 @@ private struct SpellRunSheet: View {
     private func header(_ run: SpellRun) -> String {
         let number = book.runs(of: run.spellID).reversed().firstIndex { $0.id == run.id }.map { $0 + 1 } ?? 1
         let who = run.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner
-        return (["Run \(number)", "by \(who)", run.startedAt.formatted(date: .omitted, time: .shortened)]
+        return (["Cast \(number)", "by \(who)", run.startedAt.formatted(date: .omitted, time: .shortened)]
             + (run.issue.map { ["issue \($0)"] } ?? [])).joined(separator: " · ")
     }
 
