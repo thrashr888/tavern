@@ -56,6 +56,10 @@ xcrun simctl install "$device" .build/ios-dd/Build/Products/Debug-iphonesimulato
 echo "Agents: ${TAVERN_AGENTS:-as saved in the app}"
 SIMCTL_CHILD_TAVERN_AGENTS="${TAVERN_AGENTS:-}" SIMCTL_CHILD_TAVERN_OPEN="${TAVERN_OPEN:-}" \
   xcrun simctl launch --terminate-running-process "$device" dev.thrashr888.tavern.phone
-# Newer Xcodes ship no Simulator app; the device still runs and screenshots work.
-simulator="$(xcode-select -p)/Applications/Simulator.app"
-[ -d "$simulator" ] && open "$simulator" || echo "Running on $device (xcrun simctl io $device screenshot shot.png)"
+# Show the phone: Xcode 27 moved the Simulator window into Device Hub (Xcode > Open Developer
+# Tool > Device Hub); older Xcodes have Simulator.app.
+dev="$(xcode-select -p)"
+for app in "$dev/../Applications/DeviceHub.app" "$dev/Applications/Simulator.app"; do
+  if [ -d "$app" ]; then open "$app"; echo "Showing $device in $(basename "$app" .app)"; exit 0; fi
+done
+echo "Running on $device (xcrun simctl io $device screenshot shot.png)"
