@@ -158,19 +158,39 @@ struct LinkCard: View {
 struct LinksSection: View {
     @ObservedObject var session: PiAgentSession
     var agentName: String
+    @ObservedObject private var previews = LinkPreviews.shared
+    @State private var query = ""
 
     var body: some View {
-        let links = Self.links(in: session.transcript)
+        let all = Self.links(in: session.transcript)
+        let links = all.filter { matches($0.url) }
         VStack(alignment: .leading, spacing: 10) {
             Text("Links").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
-            if links.isEmpty {
+            if all.isEmpty {
                 Text("No links in this thread yet.").tavernFont(.callout).foregroundStyle(.secondary)
+            } else {
+                TextField("Filter links", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .tavernFont(.callout)
+                if links.isEmpty {
+                    Text("No links match.").tavernFont(.callout).foregroundStyle(.secondary)
+                }
             }
             ForEach(links, id: \.url) { link in
                 LinkListRow(url: link.url, from: link.fromUser ? "You" : agentName, date: link.date)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Every word of the filter appears in the link's title, site, summary or address.
+    private func matches(_ url: URL) -> Bool {
+        let words = query.lowercased().split(whereSeparator: \.isWhitespace)
+        guard !words.isEmpty else { return true }
+        let preview = previews.preview(for: url)
+        let text = [preview?.displayTitle, preview?.siteName, preview?.summary, url.absoluteString]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        return words.allSatisfy { text.contains($0) }
     }
 
     struct Link {
