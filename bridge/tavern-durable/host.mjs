@@ -48,7 +48,9 @@ const mcp = mcpExtension(mcpServers);
 // PAP's start_task and finish_task only file the agent's calls under a task; they change nothing
 // the user has, so they don't ask. Its run (and send_feedback) still do.
 const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
-const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name)).map((tool) => tool.name));
+// Tavern's own tools (the home agent's "tavern" server) ask the user in Tavern itself.
+const asksItself = (name) => name.startsWith("tavern__");
+const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name) && !asksItself(tool.name)).map((tool) => tool.name));
 const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges }), mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {

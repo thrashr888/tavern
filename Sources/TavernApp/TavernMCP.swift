@@ -6,9 +6,10 @@ import UserNotifications
 /// Tavern's own MCP server, for the home agent (the Pi agent on this Mac) to set Tavern up: read
 /// the party, status and stats; add or edit members, lore links and mail projects; switch the
 /// theme; open a page; post a notification. It listens on a Unix socket in Tavern's folder that
-/// only this user can open, and the agent's host reaches it with `nc -U <path>`. Tools that
-/// change something aren't marked read-only, so the host asks the user before each one.
-/// Nothing here touches credentials, PAP, mail sending or deletes.
+/// only this user can open, and the agent's host reaches it with `nc -U <path>`. Tavern itself
+/// asks the user before every tool that changes something, whoever connected (agents' hosts
+/// skip their own prompt for these). Nothing here touches credentials, PAP, mail sending or
+/// deletes.
 @MainActor
 final class TavernMCP {
     static var socketPath: String? { TavernPaths.file("tavern.sock")?.path }
@@ -63,6 +64,9 @@ final class TavernMCP {
     }
 
     private func call(_ name: String, arguments: JSONValue) async -> JSONValue {
+        if let tool = Self.tools.first(where: { $0.name == name }), !tool.readOnly, !confirm(tool, arguments) {
+            return ["content": .array([["type": "text", "text": "The user declined this. Ask before trying it another way."]]), "isError": true]
+        }
         do {
             let value = try await run(name, arguments)
             let text = (try? value.encoded()).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
@@ -70,6 +74,23 @@ final class TavernMCP {
         } catch {
             return ["content": .array([["type": "text", "text": .string(String(describing: error))]]), "isError": true]
         }
+    }
+
+    /// Asks the user, in Tavern, before a change: what it is and its arguments in full.
+    private func confirm(_ tool: Tool, _ arguments: JSONValue) -> Bool {
+        let home = model?.roster.homeAgentID.flatMap { model?.roster.member(id: $0)?.name } ?? "An agent"
+        let alert = NSAlert()
+        let actions = [
+            "tavern_member_set": "add or change a party member", "tavern_avatar_set": "set a member's avatar from a file",
+            "tavern_lore_add": "add a lore link", "tavern_mail_project_add": "add a mail project",
+            "tavern_theme_set": "switch Tavern's theme", "tavern_open_page": "open a page in Tavern", "tavern_notify": "post a notification",
+        ]
+        alert.messageText = "\(home) wants to \(actions[tool.name] ?? tool.name)"
+        alert.informativeText = (try? arguments.encoded()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: Tools
