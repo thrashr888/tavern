@@ -5,36 +5,30 @@ import TavernCore
 struct AgentListView: View {
     @EnvironmentObject private var model: PhoneModel
     @State private var adding = false
-    /// TAVERN_OPEN (an agent id) opens that thread at launch, for the Simulator and screenshots.
-    @State private var path: [String] = ProcessInfo.processInfo.environment["TAVERN_OPEN"].flatMap { $0.isEmpty ? nil : [$0] } ?? []
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                ForEach(model.agents) { agent in
-                    if let session = model.session(for: agent) {
-                        NavigationLink(value: agent.id) { AgentRow(agent: agent, session: session) }
-                    }
-                }
-                .onDelete { model.remove(at: $0) }
-            }
-            .overlay {
-                if model.agents.isEmpty {
-                    ContentUnavailableView("No agents yet", systemImage: "person.3",
-                                           description: Text("Add an agent's host and port, such as flint.your-tailnet.ts.net and 19011."))
+        List {
+            ForEach(model.agents) { agent in
+                if let session = model.session(for: agent) {
+                    NavigationLink(value: agent.id) { AgentRow(agent: agent, session: session) }
                 }
             }
-            .navigationTitle("Tavern")
-            .navigationDestination(for: String.self) { id in
-                if let agent = model.agents.first(where: { $0.id == id }), let session = model.session(for: agent) {
-                    ThreadView(agent: agent, session: session)
-                }
-            }
-            .toolbar {
-                Button { adding = true } label: { Label("Add agent", systemImage: "plus") }
-            }
-            .sheet(isPresented: $adding) { AddAgentView().environmentObject(model) }
+            .onDelete { model.remove(at: $0) }
         }
+        .overlay {
+            if model.agents.isEmpty {
+                ContentUnavailableView("No agents yet", systemImage: "person.3",
+                                       description: Text("Add an agent's host and port, such as flint.your-tailnet.ts.net and 19011."))
+            }
+        }
+        .navigationTitle("Agents")
+        .refreshable {
+            for agent in model.agents { await model.session(for: agent)?.reconnectNow() }
+        }
+        .toolbar {
+            Button { adding = true } label: { Label("Add agent", systemImage: "plus") }
+        }
+        .sheet(isPresented: $adding) { AddAgentView().environmentObject(model) }
     }
 }
 
