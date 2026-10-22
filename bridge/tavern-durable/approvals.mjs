@@ -94,44 +94,55 @@ function walk(file, depth = 0) {
   return current;
 }
 
-/** Why this call needs Paul, or null when it can run. */
-export function riskOf(call, { policy = "risky", cwd = process.cwd(), mcpChanges } = {}) {
+/**
+ * Why this call needs Paul, or null when it can run. `hard` reasons (the rules above: deletes,
+ * root, secrets, paths that can't be checked) always go to Paul; the rest, from the "all" policy
+ * and MCP tools that can change things, a decision model may allow (see judge.mjs).
+ */
+export function assess(call, { policy = "risky", cwd = process.cwd(), mcpChanges } = {}) {
   if (policy === "off") return null;
   const args = call?.arguments ?? {};
+  const hard = (reason) => ({ reason, hard: true });
+  const soft = (reason) => ({ reason, hard: false });
   switch (call?.name) {
     case "bash": {
       const command = String(args.command ?? "");
-      if (policy === "all") return "runs a shell command";
+      for (const [pattern, reason] of RISKY_COMMANDS) if (pattern.test(command)) return hard(reason);
       // Secrets named on the command line count too (cat ~/.zshrc, grep KEY .env).
-      for (const [pattern, reason] of RISKY_COMMANDS) if (pattern.test(command)) return reason;
       const secret = command.split(/[\s'"=<>|;&()]+/).find((word) => word && SECRET_PATHS.some((pattern) => pattern.test(word)));
-      if (secret) return `touches ${secret.slice(0, 120)}, which may hold keys`;
-      return null;
+      if (secret) return hard(`touches ${secret.slice(0, 120)}, which may hold keys`);
+      return policy === "all" ? soft("runs a shell command") : null;
     }
     case "read":
     case "write":
     case "edit": {
       const files = resolvePaths(args.path, cwd);
-      if (files.includes(null)) return `${call.name === "read" ? "reads" : "changes"} a path that couldn't be checked`;
-      if (files.some((file) => SECRET_PATHS.some((pattern) => pattern.test(file)))) return `${call.name === "read" ? "reads" : "changes"} a file that may hold keys`;
-      if (policy === "all" && call.name !== "read") return "changes a file";
-      return null;
+      const verb = call.name === "read" ? "reads" : "changes";
+      if (files.includes(null)) return hard(`${verb} a path that couldn't be checked`);
+      if (files.some((file) => SECRET_PATHS.some((pattern) => pattern.test(file)))) return hard(`${verb} a file that may hold keys`);
+      return policy === "all" && call.name !== "read" ? soft("changes a file") : null;
     }
     default:
       // MCP tools that aren't read-only (see mcp.mjs) change something on their server.
-      if (mcpChanges?.has(call?.name)) return `runs ${call.name.replace("__", "'s ")}, which can change things`;
+      if (mcpChanges?.has(call?.name)) return soft(`runs ${call.name.replace("__", "'s ")}, which can change things`);
       return null;
   }
 }
 
+/** Why this call needs Paul, or null when it can run. */
+export function riskOf(call, options) {
+  return assess(call, options)?.reason ?? null;
+}
+
 /** The dialog Tavern shows: a title and the call in full. */
-export function describe(call, reason) {
+export function describe(call, reason, verdict) {
   const args = call?.arguments ?? {};
   const detail =
     call?.name === "bash" ? String(args.command ?? "")
     : "path" in args ? `${call.name} ${String(args.path ?? "")}`.trim()
     : `${call?.name ?? "tool"} ${JSON.stringify(args)}`;
-  return { title: `Allow ${call?.name ?? "tool"}? It ${reason}.`, message: detail.slice(0, 4000) };
+  const judged = verdict ? `\n\n${verdict.model}: ${Math.round(verdict.p * 100)}% routine, so it's yours to decide.` : "";
+  return { title: `Allow ${call?.name ?? "tool"}? It ${reason}.`, message: detail.slice(0, 4000) + judged };
 }
 
 /**
@@ -194,12 +205,17 @@ export function approvalExtension(approvals, options) {
         task: "pi.tool",
         handlers: {
           async beforeTool(call, api, context) {
-            const reason = riskOf(call, options);
-            if (!reason) return undefined;
+            const risk = assess(call, options);
+            if (!risk) return undefined;
             let decision = await api.memo("tavern.approval", context);
             if (decision === undefined) {
-              const answer = await approvals.ask({ id: `approval-${api.taskId}`, ...describe(call, reason) }, context?.abortSignal);
+              // A routine step the decision model is sure of runs without Paul; anything else asks.
+              const verdict = risk.hard ? null : await options?.judge?.verdict(call, risk.reason);
+              const answer = verdict?.allow
+                ? { allow: true, note: "auto", by: verdict.model, p: verdict.p }
+                : await approvals.ask({ id: `approval-${api.taskId}`, ...describe(call, risk.reason, verdict) }, context?.abortSignal);
               decision = await api.memo("tavern.approval", answer, context);
+              if (verdict?.allow) options?.notify?.(`Ran ${call?.name ?? "a tool"} without asking: ${verdict.model} judged it routine (${Math.round(verdict.p * 100)}%).`);
             }
             if (decision.allow) return undefined;
             return { block: decision.note === "aborted" ? "the turn was aborted" : "Paul declined this. Ask before trying it another way." };

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Approvals, riskOf } from "../approvals.mjs";
+import { Approvals, approvalExtension, assess, riskOf } from "../approvals.mjs";
+import { Judge, jevBackend } from "../judge.mjs";
 
 const bash = (command) => ({ name: "bash", arguments: { command } });
 const file = (name, path) => ({ name, arguments: { path } });
@@ -72,4 +73,79 @@ test("ask dialogs: select with options, input without, and bad arguments refused
   const waiting = approvals.ask({ id: "ask-x", method: "select", title: "Q", options: ["a", "b"] });
   assert.equal(approvals.reply("ask-x", { value: "a" }), true);
   assert.deepEqual(await waiting, { value: "a" });
+});
+
+test("hard rules stay hard under every policy; the rest is soft", () => {
+  assert.deepEqual(assess(bash("rm -rf build"), { policy: "all" }), { reason: "deletes files recursively or forcibly", hard: true });
+  assert.equal(assess(bash("cat ~/.zshrc"), { policy: "all" }).hard, true);
+  assert.deepEqual(assess(bash("npm test"), { policy: "all" }), { reason: "runs a shell command", hard: false });
+  assert.equal(assess(file("write", "notes.md"), { policy: "all", cwd: "/work" }).hard, false);
+  assert.equal(assess({ name: "pap__run", arguments: {} }, { mcpChanges: new Set(["pap__run"]) }).hard, false);
+  assert.equal(assess(bash("npm test")), null);
+});
+
+/** Runs the hook once for `call`, with a memo store and an ask that records what reached Paul. */
+async function runHook(call, { judge, policy = "all", answer = { allow: true } } = {}) {
+  const asked = [];
+  const notices = [];
+  const memos = new Map();
+  const approvals = { ask: async (dialog) => { asked.push(dialog); return answer; } };
+  const hook = approvalExtension(approvals, { policy, cwd: "/work", judge, notify: (m) => notices.push(m) }).hooks[0].handlers.beforeTool;
+  const api = { taskId: "t1", memo: async (name, value) => { if (value !== undefined && typeof value === "object" && "allow" in value) memos.set(name, value); return memos.get(name); } };
+  const result = await hook(call, api, {});
+  return { result, asked, notices, memo: memos.get("tavern.approval") };
+}
+
+test("a sure judge runs routine calls unasked; doubt, failure and hard rules go to Paul", async () => {
+  const sure = { verdict: async () => ({ allow: true, p: 0.95, model: "clef-flash" }) };
+  const unsure = { verdict: async () => ({ allow: false, p: 0.3, model: "clef-flash" }) };
+  const failed = { verdict: async () => null };
+  let consulted = 0;
+  const counting = { verdict: async () => { consulted++; return { allow: true, p: 1, model: "x" }; } };
+
+  let run = await runHook(bash("npm test"), { judge: sure });
+  assert.equal(run.result, undefined);
+  assert.equal(run.asked.length, 0);
+  assert.equal(run.memo.note, "auto");
+  assert.match(run.notices[0], /clef-flash judged it routine \(95%\)/);
+
+  run = await runHook(bash("npm test"), { judge: unsure });
+  assert.equal(run.asked.length, 1);
+  assert.match(run.asked[0].message, /clef-flash: 30% routine/);
+
+  run = await runHook(bash("npm test"), { judge: failed });
+  assert.equal(run.asked.length, 1);
+
+  run = await runHook(bash("rm -rf build"), { judge: counting });
+  assert.equal(run.asked.length, 1);
+  assert.equal(consulted, 0, "hard rules never ask the judge");
+
+  run = await runHook(bash("git push --force"), { judge: sure, answer: { allow: false } });
+  assert.match(run.result.block, /Paul declined/);
+});
+
+test("the judge reads a yes/no answer and treats anything else as no answer", async () => {
+  const backend = { endpoint: "http://judge/v1/systemone", model: "clef-flash", local: true };
+  const reply = (body) => async () => ({ ok: true, json: async () => body });
+  let judge = new Judge({ find: async () => backend, fetchImpl: reply({ answers: { routine: { type: "noul", noul: 0.9 } } }) });
+  assert.deepEqual(await judge.verdict(bash("ls"), "runs a shell command"), { allow: true, p: 0.9, model: "clef-flash" });
+  judge = new Judge({ find: async () => backend, min: 0.95, fetchImpl: reply({ answers: { routine: { type: "noul", noul: 0.9 } } }) });
+  assert.equal((await judge.verdict(bash("ls"), "x")).allow, false);
+  judge = new Judge({ find: async () => backend, fetchImpl: reply({ answers: {} }) });
+  assert.equal(await judge.verdict(bash("ls"), "x"), null);
+  judge = new Judge({ find: async () => backend, fetchImpl: async () => ({ ok: false, status: 500 }) });
+  assert.equal(await judge.verdict(bash("ls"), "x"), null);
+  judge = new Judge({ mode: "off", find: async () => backend });
+  assert.equal(await judge.verdict(bash("ls"), "x"), null);
+  judge = new Judge({ find: async () => null });
+  assert.equal(await judge.verdict(bash("ls"), "x"), null);
+});
+
+test("Jev needs a key from the environment or a key file", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "jev-"));
+  assert.equal(jevBackend({}, home), null);
+  assert.equal(jevBackend({ TYPESAFE_API_KEY: "k1" }, home).key, "k1");
+  fs.mkdirSync(path.join(home, ".config/typesafe"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".config/typesafe/api-key"), "k2\n");
+  assert.equal(jevBackend({}, home).key, "k2");
 });
