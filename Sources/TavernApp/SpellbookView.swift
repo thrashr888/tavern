@@ -14,10 +14,32 @@ final class SpellbookStore: ObservableObject {
     /// Runs started here, newest first (mock 2: running a spell by hand).
     @Published private(set) var runs: [SpellRun] = []
     @Published private(set) var runError: String?
+    /// Spells starred on this Mac, by SB id.
+    @Published private(set) var starred: Set<String> = Set(UserDefaults.standard.stringArray(forKey: SpellbookStore.starredKey) ?? [])
+    /// When each spell was last cast, by an agent or a run here, by SB id.
+    @Published private(set) var lastUsed: [String: Date] = [:]
+    private static let starredKey = "tavern.spellbook.starred"
     private var documents: [String: SpellDocument] = [:]
     private let runStore = SpellRunStore.defaultURL().map(SpellRunStore.init(url:))
 
     init() { runs = runStore?.load() ?? [] }
+
+    func toggleStar(_ id: String) {
+        if starred.contains(id) { starred.remove(id) } else { starred.insert(id) }
+        UserDefaults.standard.set(starred.sorted(), forKey: Self.starredKey)
+    }
+
+    /// Rereads the last year's casts from the event log, plus runs kept here.
+    func refreshUsage(store: EventStore?) {
+        var latest: [String: Date] = [:]
+        let casts = store.map { SpellCast.recent(store: $0, since: Date().addingTimeInterval(-365 * 86_400)) } ?? []
+        for cast in casts {
+            let id = spell(cast.spell)?.id ?? cast.spell
+            latest[id] = max(latest[id] ?? .distantPast, cast.date)
+        }
+        for run in runs { latest[run.spellID] = max(latest[run.spellID] ?? .distantPast, run.startedAt) }
+        if latest != lastUsed { lastUsed = latest }
+    }
 
     /// The newest unfinished run of a spell.
     func openRun(for spellID: String) -> SpellRun? { runs.first { $0.spellID == spellID && !$0.isFinished } }
@@ -143,7 +165,12 @@ struct SpellbookView: View {
     @ObservedObject var book: SpellbookStore
     @Binding var page: Page?
     let spellID: String?
+    enum Sort: String, CaseIterable {
+        case lifecycle = "Lifecycle", lastUsed = "Last used", name = "Name"
+    }
+
     @State private var filter: Filter? = .all
+    @AppStorage("tavern.spellbook.sort") private var sort: Sort = .lifecycle
     @State private var query = ""
     /// A decision model's pick for a filter that reads like a task ("draft the weekly update").
     @State private var suggested: (id: String, probability: Double)?
@@ -175,6 +202,12 @@ struct SpellbookView: View {
         .navigationTitle("Spellbook")
         .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await book.refresh() } }
         .task(id: query) { await suggest() }
+        .task {
+            while !Task.isCancelled {
+                book.refreshUsage(store: model.store)
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
     }
 
     // MARK: Filters
@@ -275,7 +308,20 @@ struct SpellbookView: View {
             .padding(.vertical, 8)
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            HStack {
+                Text("\(shown.count) spells").tavernFont(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Picker("Sort", selection: $sort) {
+                    ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .tavernFont(.caption)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
             if let suggested, let spell = book.snapshot?.spell(id: suggested.id) {
                 HStack(spacing: 6) {
                     Text("Fits:").tavernFont(.caption).foregroundStyle(.secondary)
@@ -295,23 +341,54 @@ struct SpellbookView: View {
             Divider()
             List(selection: selection) {
                 let shown = self.shown
-                ForEach(Self.groups, id: \.self) { lifecycle in
-                    let group = shown.filter { $0.lifecycle == lifecycle }
-                    if !group.isEmpty {
-                        Section(lifecycle.capitalized) {
-                            ForEach(group) { SpellRow(spell: $0, owner: $0.owner.map(memberName)).themedTag($0.id, selection: spellID) }
+                let stars = shown.filter { book.starred.contains($0.id) }
+                let rest = shown.filter { !book.starred.contains($0.id) }
+                if !stars.isEmpty {
+                    Section("Starred") { ForEach(sorted(stars)) { row($0) } }
+                }
+                switch sort {
+                case .lifecycle:
+                    ForEach(Self.groups, id: \.self) { lifecycle in
+                        let group = rest.filter { $0.lifecycle == lifecycle }
+                        if !group.isEmpty {
+                            Section(lifecycle.capitalized) { ForEach(group) { row($0) } }
                         }
                     }
-                }
-                // Lifecycles a newer repo adds still show.
-                let other = shown.filter { !Self.groups.contains($0.lifecycle) }
-                if !other.isEmpty {
-                    Section("Other") { ForEach(other) { SpellRow(spell: $0, owner: $0.owner.map(memberName)).themedTag($0.id, selection: spellID) } }
+                    // Lifecycles a newer repo adds still show.
+                    let other = rest.filter { !Self.groups.contains($0.lifecycle) }
+                    if !other.isEmpty {
+                        Section("Other") { ForEach(other) { row($0) } }
+                    }
+                case .lastUsed, .name:
+                    if !rest.isEmpty {
+                        Section(stars.isEmpty ? "" : "All") { ForEach(sorted(rest)) { row($0) } }
+                    }
                 }
                 if shown.isEmpty { Text("No matches").tavernFont(.caption).foregroundStyle(.tertiary) }
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+        }
+    }
+
+    private func row(_ spell: Spell) -> some View {
+        SpellRow(spell: spell, owner: spell.owner.map(memberName), starred: book.starred.contains(spell.id),
+                 lastUsed: sort == .lastUsed ? book.lastUsed[spell.id] : nil, showLastUsed: sort == .lastUsed) {
+            book.toggleStar(spell.id)
+        }
+        .themedTag(spell.id, selection: spellID)
+    }
+
+    /// Newest cast first (never-cast spells after, by number), or by title; lifecycle keeps index order.
+    private func sorted(_ spells: [Spell]) -> [Spell] {
+        switch sort {
+        case .lifecycle: return spells
+        case .name: return spells.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .lastUsed:
+            return spells.enumerated().sorted { a, b in
+                let x = book.lastUsed[a.element.id] ?? .distantPast, y = book.lastUsed[b.element.id] ?? .distantPast
+                return x != y ? x > y : a.offset < b.offset
+            }.map(\.element)
         }
     }
 
@@ -361,18 +438,47 @@ struct SpellbookView: View {
 private struct SpellRow: View {
     let spell: Spell
     let owner: String?
+    var starred = false
+    var lastUsed: Date? = nil
+    var showLastUsed = false
+    var toggleStar: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(spell.title).tavernFont(.body, weight: .semibold).lineLimit(1)
-            HStack(spacing: 6) {
-                Text(spell.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                if let owner { Text("· \(owner)").tavernFont(.caption).foregroundStyle(.secondary) }
-                SpellPills(spell: spell)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(spell.title).tavernFont(.body, weight: .semibold).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if showLastUsed {
+                        Text(lastUsed.map { $0.formatted(.relative(presentation: .named)) } ?? "never")
+                            .tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                HStack(spacing: 6) {
+                    Text(spell.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                    if let owner { Text("· \(owner)").tavernFont(.caption).foregroundStyle(.secondary) }
+                    SpellPills(spell: spell)
+                }
             }
+            StarButton(starred: starred, toggle: toggleStar)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
+    }
+}
+
+/// Star or unstar a spell; starred spells sit at the top of the list.
+struct StarButton: View {
+    let starred: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            Image(systemName: starred ? "star.fill" : "star")
+                .foregroundStyle(starred ? Color.yellow : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(starred ? "Unstar" : "Star")
     }
 }
 
@@ -384,6 +490,8 @@ struct SpellPill: View {
     var body: some View {
         Text(text)
             .tavernFont(.caption, weight: .medium)
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 7).padding(.vertical, 1)
             .foregroundStyle(color)
             .overlay(Capsule().strokeBorder(color.opacity(0.8)))
@@ -465,7 +573,10 @@ private struct SpellDetail: View {
                       "reviewed by \(name(spell.reviewOwner))"].joined(separator: " · "))
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Text(spell.title).tavernFont(.title, weight: .bold)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(spell.title).tavernFont(.title, weight: .bold)
+                    StarButton(starred: book.starred.contains(spell.id)) { book.toggleStar(spell.id) }.font(.title3)
+                }
                 HStack(spacing: 6) {
                     SpellPills(spell: spell)
                     Text("For \(spell.appliesTo.map { $0 == "all" ? "everyone" : name($0) }.joined(separator: ", "))")
@@ -581,7 +692,7 @@ private struct SpellDetail: View {
         var parts = ["Source: spellbook @ \(book.snapshot?.commit ?? "?")"]
         if let at = book.refreshedAt { parts.append("as of \(at.formatted(date: .omitted, time: .shortened))") }
         let local = book.runs(of: spell.id).first?.startedAt
-        let used = [lastCast, local].compactMap { $0 }.max()
+        let used = [lastCast, local, book.lastUsed[spell.id]].compactMap { $0 }.max()
         parts.append("Last used: \(used.map { $0.formatted(.relative(presentation: .named)) } ?? "none yet")")
         parts.append("Next review: \(Self.nextFriday().formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
         return parts.joined(separator: " · ")
