@@ -8,6 +8,8 @@ import TavernCore
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selection: Page?
+    /// The latest spells cast, by agents or from Tavern.
+    @State private var recentCasts: [SpellCast] = []
     private var stats: DashboardStats { model.dashboardStats ?? DashboardStats() }
 
     /// Distinct open tickets that some party member is on.
@@ -164,6 +166,28 @@ struct DashboardView: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    section("Spells cast · 7 days") {
+                        if recentCasts.isEmpty { Text("No spells cast yet this week.").foregroundStyle(.secondary) }
+                        ForEach(recentCasts.prefix(8)) { cast in
+                            let spell = model.spellbook.spell(cast.spell)
+                            Button { selection = .spellbook(spell: spell?.id ?? cast.spell) } label: {
+                                HStack(spacing: 8) {
+                                    if let agent = cast.agentID.flatMap({ model.roster.member(id: $0) }) {
+                                        AvatarView(member: agent, size: 20, hoverCard: false)
+                                    } else {
+                                        Image(systemName: "person.crop.circle").foregroundStyle(.secondary).frame(width: 20)
+                                    }
+                                    Text(spell?.id ?? cast.spell).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                                    Text(spell?.title ?? cast.spell).lineLimit(1).truncationMode(.tail)
+                                    Spacer()
+                                    Text(cast.date.formatted(.relative(presentation: .numeric))).tavernFont(.caption).foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(cast.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner) cast \(spell.map(\.citation) ?? cast.spell)\(cast.fromTavern ? " from Tavern" : "")")
+                        }
+                    }
                     section("Tools and cards · 7 days") {
                         if value.tools.isEmpty { Text("No tool calls yet.").foregroundStyle(.secondary) }
                         ForEach(value.tools.prefix(6)) { tool in
@@ -224,6 +248,9 @@ struct DashboardView: View {
         .task {
             while !Task.isCancelled {
                 model.dashboardStats = DashboardStats(store: model.store, mail: model.mail, roster: model.roster)
+                if let store = model.store {
+                    recentCasts = SpellCast.recent(store: store, since: Date().addingTimeInterval(-7 * 86_400))
+                }
                 // Mail loads a moment after launch; check again soon until it has.
                 try? await Task.sleep(for: .seconds(stats.threadCount == 0 ? 3 : 30))
             }
