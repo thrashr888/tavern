@@ -14,7 +14,7 @@ final class SpellbookStore: ObservableObject {
     /// Runs started here, newest first (mock 2: running a spell by hand).
     @Published private(set) var runs: [SpellRun] = []
     @Published private(set) var runError: String?
-    /// Spells starred on this Mac, by SB id.
+    /// Spells starred on this Mac, by SB id; roster.json's `spellbookStars` until the first change here.
     @Published private(set) var starred: Set<String> = Set(UserDefaults.standard.stringArray(forKey: SpellbookStore.starredKey) ?? [])
     /// When each spell was last cast, by an agent or a run here, by SB id.
     @Published private(set) var lastUsed: [String: Date] = [:]
@@ -79,6 +79,7 @@ final class SpellbookStore: ObservableObject {
 
     /// Points at the roster's repo and shows what's already on disk.
     func configure(roster: Roster) async {
+        if UserDefaults.standard.stringArray(forKey: Self.starredKey) == nil { starred = Set(roster.spellbookStars ?? []) }
         guard let source = SpellbookSource(roster: roster), let directory = SpellbookRepo.defaultDirectory() else {
             repo = nil
             snapshot = nil
@@ -151,14 +152,14 @@ final class SpellbookStore: ObservableObject {
     func spell(_ key: String) -> Spell? { snapshot?.spells.first { $0.id == key || $0.name == key } }
 }
 
-/// Spells, read-only (mock 1), laid out like Goals: filters with counts (type, lifecycle, gate,
-/// owner), the matching spells by lifecycle, and the open spell. Pages restore by SB id.
+/// Spells, read-only (mock 1), laid out like Goals: filters with counts (starred, type, owner), the
+/// matching spells, and the open spell. Every spell in the repo got there by an accepted PR, so
+/// there's no lifecycle or review state here. Pages restore by SB id.
 struct SpellbookView: View {
     enum Filter: Hashable {
         case all
+        case starred
         case kind(String)
-        case lifecycle(String)
-        case gate(String)
         case owner(String)
     }
 
@@ -167,11 +168,11 @@ struct SpellbookView: View {
     @Binding var page: Page?
     let spellID: String?
     enum Sort: String, CaseIterable {
-        case lifecycle = "Lifecycle", lastUsed = "Last used", name = "Name"
+        case lastUsed = "Last used", name = "Name", number = "Number"
     }
 
     @State private var filter: Filter? = .all
-    @AppStorage("tavern.spellbook.sort") private var sort: Sort = .lifecycle
+    @AppStorage("tavern.spellbook.sort2") private var sort: Sort = .lastUsed
     @State private var query = ""
     /// A decision model's pick for a filter that reads like a task ("draft the weekly update").
     @State private var suggested: (id: String, probability: Double)?
@@ -194,7 +195,7 @@ struct SpellbookView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260)
+                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260).splitAutosave("spellbook")
                     spellList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
                     detail.frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -232,21 +233,10 @@ struct SpellbookView: View {
             Divider()
             List(selection: $filter) {
                 row("All spells", count: current.count).themedTag(Filter.all, selection: filter)
+                row("Starred", count: current.filter { book.starred.contains($0.id) }.count).themedTag(Filter.starred, selection: filter)
                 Section("Type") {
                     row("Spells", count: current.filter { !$0.isRitual }.count).themedTag(Filter.kind("spell"), selection: filter)
                     row("Rituals", count: current.filter(\.isRitual).count).themedTag(Filter.kind("ritual"), selection: filter)
-                }
-                Section("Lifecycle") {
-                    ForEach(["live", "proposal", "retired"], id: \.self) { lifecycle in
-                        row(lifecycle.capitalized, count: all.filter { $0.lifecycle == lifecycle }.count)
-                            .themedTag(Filter.lifecycle(lifecycle), selection: filter)
-                    }
-                }
-                Section("Gate") {
-                    ForEach(["needs-paul", "needs-review", "blocked"], id: \.self) { gate in
-                        row(SpellPill.gateLabel(gate, owner: model.roster.owner), count: current.filter { $0.gate == gate }.count)
-                            .themedTag(Filter.gate(gate), selection: filter)
-                    }
                 }
                 Section("Owner") {
                     ForEach(owners, id: \.name) { item in
@@ -286,8 +276,7 @@ struct SpellbookView: View {
         switch filter ?? .all {
         case .all: pool = current
         case .kind(let kind): pool = current.filter { $0.kind == kind }
-        case .lifecycle(let lifecycle): pool = all.filter { $0.lifecycle == lifecycle }
-        case .gate(let gate): pool = current.filter { $0.gate == gate }
+        case .starred: pool = current.filter { book.starred.contains($0.id) }
         case .owner(let owner): pool = current.filter { $0.owner == owner }
         }
         guard !q.isEmpty else { return pool }
@@ -297,7 +286,6 @@ struct SpellbookView: View {
         }
     }
 
-    private static let groups = ["live", "proposal", "retired"]
 
     private var spellList: some View {
         VStack(spacing: 0) {
@@ -347,23 +335,8 @@ struct SpellbookView: View {
                 if !stars.isEmpty {
                     Section("Starred") { ForEach(sorted(stars)) { row($0) } }
                 }
-                switch sort {
-                case .lifecycle:
-                    ForEach(Self.groups, id: \.self) { lifecycle in
-                        let group = rest.filter { $0.lifecycle == lifecycle }
-                        if !group.isEmpty {
-                            Section(lifecycle.capitalized) { ForEach(group) { row($0) } }
-                        }
-                    }
-                    // Lifecycles a newer repo adds still show.
-                    let other = rest.filter { !Self.groups.contains($0.lifecycle) }
-                    if !other.isEmpty {
-                        Section("Other") { ForEach(other) { row($0) } }
-                    }
-                case .lastUsed, .name:
-                    if !rest.isEmpty {
-                        Section(stars.isEmpty ? "" : "All") { ForEach(sorted(rest)) { row($0) } }
-                    }
+                if !rest.isEmpty {
+                    Section(stars.isEmpty ? "" : "All") { ForEach(sorted(rest)) { row($0) } }
                 }
                 if shown.isEmpty { Text("No matches").tavernFont(.caption).foregroundStyle(.tertiary) }
             }
@@ -380,10 +353,10 @@ struct SpellbookView: View {
         .themedTag(spell.id, selection: spellID)
     }
 
-    /// Newest cast first (never-cast spells after, by number), or by title; lifecycle keeps index order.
+    /// Newest cast first (never-cast spells after, by number), by title, or by number (index order).
     private func sorted(_ spells: [Spell]) -> [Spell] {
         switch sort {
-        case .lifecycle: return spells
+        case .number: return spells
         case .name: return spells.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         case .lastUsed:
             return spells.enumerated().sorted { a, b in
@@ -435,7 +408,7 @@ struct SpellbookView: View {
     }
 }
 
-/// Title, then "SB-20 · Wololo" and the spell's pills: Ritual, its lifecycle, its gate.
+/// Title, then "SB-20 · Wololo" and a Ritual pill for rituals.
 private struct SpellRow: View {
     let spell: Spell
     let owner: String?
@@ -497,25 +470,6 @@ struct SpellPill: View {
             .foregroundStyle(color)
             .overlay(Capsule().strokeBorder(color.opacity(0.8)))
     }
-
-    static func gateLabel(_ gate: String, owner: String) -> String {
-        switch gate {
-        case "needs-paul": return "Needs \(owner)"
-        case "needs-review": return "Needs review"
-        case "blocked": return "Blocked"
-        default: return gate.replacingOccurrences(of: "-", with: " ").capitalized
-        }
-    }
-
-    static func lifecycleColor(_ lifecycle: String) -> Color { lifecycle == "live" ? .green : .secondary }
-
-    static func gateColor(_ gate: String) -> Color {
-        switch gate {
-        case "needs-paul", "blocked": return .red
-        case "needs-review": return .orange
-        default: return .secondary
-        }
-    }
 }
 
 struct SpellPills: View {
@@ -525,10 +479,6 @@ struct SpellPills: View {
     var body: some View {
         HStack(spacing: 4) {
             if spell.isRitual { SpellPill(text: "Ritual", color: .tavernAccent) }
-            SpellPill(text: spell.lifecycle.capitalized, color: SpellPill.lifecycleColor(spell.lifecycle))
-            if spell.gate != "none" {
-                SpellPill(text: SpellPill.gateLabel(spell.gate, owner: model.roster.owner), color: SpellPill.gateColor(spell.gate))
-            }
         }
     }
 }
