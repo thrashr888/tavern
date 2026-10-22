@@ -8,13 +8,13 @@ final class SpellbookTests: XCTestCase {
       {"id": "SB-21", "name": "delivery-verification", "title": "Delivery verification",
        "description": "Delivery verification. Use when: A file or message has been delivered.", "kind": "spell",
        "owner": "wololo", "review_owner": "rook", "applies_to": ["all"], "lifecycle": "proposal", "gate": "needs-review",
-       "version": 1, "path": "spells/delivery-verification/SKILL.md"},
+       "version": 1, "path": "skills/delivery-verification/SKILL.md"},
       {"id": "SB-4", "name": "daily-sweep", "title": "Daily sweep", "description": "Daily sweep. Use when: 4pm.",
        "kind": "ritual", "owner": "rook", "review_owner": "rook", "applies_to": ["rook"], "lifecycle": "live", "gate": "none",
-       "version": 3, "path": "spells/daily-sweep/SKILL.md"},
+       "version": 3, "path": "skills/daily-sweep/SKILL.md"},
       {"id": "SB-9", "name": "old-way", "title": "Old way", "description": "Old way.", "kind": "spell",
        "owner": "rook", "review_owner": "rook", "applies_to": ["all"], "lifecycle": "retired", "gate": "none",
-       "version": 2, "path": "spells/old-way/SKILL.md"}
+       "version": 2, "path": "skills/old-way/SKILL.md"}
     ]}
     """
 
@@ -87,9 +87,9 @@ final class SpellbookTests: XCTestCase {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("spellbook-\(UUID())")
         let origin = root.appendingPathComponent("origin")
-        try fm.createDirectory(at: origin.appendingPathComponent("spells/delivery-verification"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: origin.appendingPathComponent("skills/delivery-verification"), withIntermediateDirectories: true)
         try Data(Self.indexJSON.utf8).write(to: origin.appendingPathComponent("index.json"))
-        try Data(Self.skill.utf8).write(to: origin.appendingPathComponent("spells/delivery-verification/SKILL.md"))
+        try Data(Self.skill.utf8).write(to: origin.appendingPathComponent("skills/delivery-verification/SKILL.md"))
         func git(_ args: String...) async throws {
             _ = try await SpellbookRepo.git(["-C", origin.path, "-c", "user.name=Test", "-c", "user.email=test@example.com"] + args)
         }

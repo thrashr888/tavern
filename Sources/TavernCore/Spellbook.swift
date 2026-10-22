@@ -6,7 +6,7 @@ import Foundation
 public struct Spell: Codable, Equatable, Identifiable, Sendable {
     /// "SB-nn", never reused.
     public var id: String
-    /// The spell's folder, spells/<name>.
+    /// The spell's folder, skills/<name> (from index.json).
     public var name: String
     public var title: String
     /// "<Title>. Use when: <trigger>."
