@@ -25,6 +25,7 @@ import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
 import { RequestLog } from "./requests.mjs";
+import { loadPiExtensions, piExtensionBridge } from "./pi-extensions.mjs";
 
 const PI_REPO = process.env.PI_REPO ?? path.join(os.homedir(), "Workspace/pi");
 const AGENT_CWD = process.env.AGENT_CWD ?? process.cwd();
@@ -40,6 +41,8 @@ let heartbeatMinutes = savedMinutes(AGENT_CWD, Number(process.env.TAVERN_DURABLE
 const HEARTBEAT_FILE = path.join(AGENT_CWD, "HEARTBEAT.md");
 // Risky tool calls wait for Paul: "risky" (default), "all" or "off". See approvals.mjs.
 const APPROVALS = process.env.TAVERN_DURABLE_APPROVALS ?? "risky";
+// Standard Pi packages (`pi install`) load into the session unless this is "off".
+const PI_EXTENSIONS = process.env.TAVERN_DURABLE_PI_EXTENSIONS ?? "on";
 
 // TAVERN_DURABLE_RUNTIME swaps in a fake runtime for tests.
 const runtimePath = process.env.TAVERN_DURABLE_RUNTIME ?? path.join(PI_REPO, "packages/coding-agent/src/experimental/durable/runtime.ts");
@@ -65,12 +68,28 @@ const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_
 const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
 const selfTools = selfExtension({ approvals, cwd: AGENT_CWD, name: process.env.AGENT_NAME, info: selfInfo, setMinutes: setHeartbeatMinutes });
 const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), selfTools, mcp];
+// Pi packages installed for this agent, such as its memory. TAVERN_DURABLE_PI_LOADER swaps in a
+// fake loader for tests. The bridge's callbacks reach the controller once the session is open.
+const piLoaded = PI_EXTENSIONS === "off" ? null : await loadPi().catch((error) => (log(`pi extensions skipped: ${error?.message ?? error}`), null));
+const pi = piExtensionBridge(piLoaded, {
+  cwd: AGENT_CWD,
+  submit: (text) => background(submit(text, "followUp")),
+  compact: (instructions) => background(controller.compact(instructions)),
+  abort: () => controller.abort(),
+  isIdle: () => !liveOf(view.current()).busy,
+  model: () => agentStateOf(view.current()).model,
+  notify: (message, level) => broadcast({ type: "extension_ui_request", id: `pi-${Date.now()}`, method: "notify", message, notifyType: level }),
+  log,
+});
+if (pi.names.length) log(`pi extensions: ${pi.names.join(", ")}`);
+if (pi.extension.tools.length || pi.extension.sections.length) extensions.push(pi.extension);
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
   if (!/No durable session exists/.test(String(error?.message))) throw error;
   return runtime.openDurable({ cwd: AGENT_CWD, continueSession: false, extensions });
 });
 const { view, controller } = durable;
+await pi.emit({ type: "session_start", reason: "startup" });
 
 const session = view.current().session ?? {};
 log(`session ${session.id} in ${AGENT_CWD}`);
@@ -85,6 +104,7 @@ if (DEBUG) logShape(view.current());
 let lastLive = liveOf(view.current());
 let lastEntryCount = piEntries(view.current()).length;
 let lastNoticeIDs = new Set((view.current().notices ?? []).map((n) => n.id));
+let compactionIDs = new Set(piEntries(view.current()).filter((e) => e.type === "compaction").map((e) => e.id));
 
 // The view batches its own updates; turn each burst into Pi RPC events for every client.
 const unsubscribe = view.subscribe(() => {
@@ -97,6 +117,13 @@ const unsubscribe = view.subscribe(() => {
     events.push({ type: "extension_ui_request", id: `notice-${notice.id}`, method: "notify", message: notice.message, notifyType: notice.level });
   }
   lastNoticeIDs = new Set((current.notices ?? []).map((n) => n.id));
+  // Pi packages hear about settled turns and new compactions (a memory package consolidates then).
+  if (lastLive.busy && !live.busy) background(pi.emit({ type: "agent_end", messages: [] }));
+  for (const entry of piEntries(current)) {
+    if (entry.type !== "compaction" || compactionIDs.has(entry.id)) continue;
+    compactionIDs.add(entry.id);
+    background(pi.emit({ type: "session_compact", compactionEntry: { id: entry.id, timestamp: entry.timestamp }, fromExtension: false, reason: "threshold", willRetry: false }));
+  }
   lastLive = live;
   lastEntryCount = count;
   for (const event of events) broadcast(event);
@@ -157,7 +184,7 @@ async function handle(socket, line) {
         const steer = command.type === "steer" || (command.type === "prompt" && command.streamingBehavior === "steer");
         const busy = liveOf(current).busy;
         const text = withAttachments(String(command.message ?? ""), command.images);
-        background(controller.submit(text, steer ? "steer" : "followUp"));
+        background(submit(text, steer ? "steer" : "followUp"));
         return reply(true, { disposition: command.type === "prompt" && !busy ? "started" : "queued" });
       }
       case "event": {
@@ -168,7 +195,7 @@ async function handle(socket, line) {
         const text = String(command.text ?? "").slice(0, 8000);
         if (!text.trim()) return reply(false, undefined, "event needs text");
         const busy = liveOf(current).busy;
-        background(controller.submit(`[Event from ${source}]\n${text}`, "followUp"));
+        background(submit(`[Event from ${source}]\n${text}`, "followUp"));
         return reply(true, { disposition: busy ? "queued" : "started" });
       }
       case "read_card": {
@@ -251,7 +278,7 @@ async function heartbeat() {
   if (!checks) {
     if (!prompt) return;
     lastHeartbeat = new Date().toISOString();
-    background(controller.submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
+    background(submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
     return;
   }
   const { found, errors } = await checks.run();
@@ -262,7 +289,7 @@ async function heartbeat() {
   if (errors.length) log(`heartbeat checks: ${errors.map((e) => `${e.check}: ${e.error}`).join("; ")}`);
   if (found.length && !liveOf(view.current()).busy) {
     lastHeartbeat = lastCheck;
-    background(controller.submit(wakeMessage(found, prompt, lastCheck), "followUp"));
+    background(submit(wakeMessage(found, prompt, lastCheck), "followUp"));
   }
 }
 
@@ -301,6 +328,21 @@ function selfInfo() {
 // First beat five minutes after start, so a restart doesn't fire one immediately.
 scheduleHeartbeat(Number(process.env.TAVERN_DURABLE_HEARTBEAT_FIRST_MS ?? 5 * 60_000));
 
+/** Submits to the session, telling Pi packages what the agent is about to read. */
+function submit(text, whenBusy) {
+  pi.setPrompt(text);
+  return controller.submit(text, whenBusy);
+}
+
+/** Pi's loader, or the test's. */
+async function loadPi() {
+  if (process.env.TAVERN_DURABLE_PI_LOADER) {
+    const fake = await import(pathToFileURL(process.env.TAVERN_DURABLE_PI_LOADER).href);
+    return fake.loadPiExtensions({ cwd: AGENT_CWD });
+  }
+  return loadPiExtensions({ piRepo: PI_REPO, cwd: AGENT_CWD, log });
+}
+
 /** Controller commands queue and may resolve only when done; answer now, report failures as notices. */
 function background(promise) {
   promise.catch((error) =>
@@ -337,6 +379,7 @@ function logShape(current) {
 }
 
 async function shutdown() {
+  await pi.emit({ type: "session_shutdown", reason: "quit" });
   unsubscribe();
   for (const mcpServer of mcpServers) mcpServer.close();
   server.close();
