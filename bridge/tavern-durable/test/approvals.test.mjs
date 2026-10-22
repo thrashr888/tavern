@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Approvals, approvalExtension, assess, riskOf } from "../approvals.mjs";
-import { Judge, jevBackend } from "../judge.mjs";
+import { Judge, jevBackend, judgeState } from "../judge.mjs";
 
 const bash = (command) => ({ name: "bash", arguments: { command } });
 const file = (name, path) => ({ name, arguments: { path } });
@@ -139,6 +139,38 @@ test("the judge reads a yes/no answer and treats anything else as no answer", as
   assert.equal(await judge.verdict(bash("ls"), "x"), null);
   judge = new Judge({ find: async () => null });
   assert.equal(await judge.verdict(bash("ls"), "x"), null);
+});
+
+test("the judge only sees calls it can show whole, and never MCP tools", async () => {
+  let asked = 0;
+  const judge = new Judge({ find: async () => ({ endpoint: "http://judge", model: "m", local: true }),
+    fetchImpl: async () => { asked++; return { ok: true, json: async () => ({ answers: { routine: { type: "noul", noul: 1 } } }) }; } });
+  assert.equal(await judge.verdict({ name: "pap__run", arguments: { tool: "emails_send" } }, "x"), null);
+  assert.equal(await judge.verdict(bash("echo ok; " + "x".repeat(5000)), "x"), null);
+  assert.equal(await judge.verdict(file("write", "/w/" + "a".repeat(2000)), "x"), null);
+  assert.equal(asked, 0);
+  const state = judgeState({ name: "write", arguments: { path: "/w/a.md", content: "y".repeat(10000) } }, "changes a file", { cwd: "/w" });
+  assert.match(state, /Path: \/w\/a\.md/);
+  assert.ok(state.length < 600, "content goes by size and start only");
+});
+
+test("Jev is used only when asked for", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "jev-"));
+  process.env.TYPESAFE_API_KEY = "k";
+  try {
+    const urls = [];
+    const fetchImpl = async (url) => {
+      urls.push(String(url));
+      if (String(url).includes("11434")) throw new Error("no ollama");
+      return { ok: true, json: async () => ({ answers: { routine: { type: "noul", noul: 0.9 } } }) };
+    };
+    assert.equal(await new Judge({ fetchImpl }).verdict(bash("ls"), "x"), null);
+    assert.ok(urls.every((url) => url.includes("11434")), "the default never calls TypeSafe");
+    assert.equal((await new Judge({ mode: "jev", fetchImpl }).verdict(bash("ls"), "x")).model, "jev-1.13.0");
+    assert.ok(urls.some((url) => url.includes("typesafe")));
+  } finally {
+    delete process.env.TYPESAFE_API_KEY;
+  }
 });
 
 test("Jev needs a key from the environment or a key file", () => {
