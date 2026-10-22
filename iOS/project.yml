@@ -1,0 +1,33 @@
+# The iPhone app: a thin client on TavernCore. Pi stays on the hosts; the phone reaches each
+# agent's durable host over TCP (the tailnet, through the system Tailscale app).
+#   xcodegen generate --spec iOS/project.yml   (from the repo root), then scripts/phone.sh
+name: TavernPhone
+options:
+  bundleIdPrefix: dev.thrashr888
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  Tavern:
+    path: ..
+targets:
+  TavernPhone:
+    type: application
+    platform: iOS
+    sources: [TavernPhone]
+    dependencies:
+      - package: Tavern
+        product: TavernCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.thrashr888.tavern.phone
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Tavern
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # Hosts are tailnet or loopback addresses: plain TCP, no TLS of their own.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Tavern talks to your Pi agents' hosts on your network.
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic

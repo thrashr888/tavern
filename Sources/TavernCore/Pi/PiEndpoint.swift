@@ -70,9 +70,15 @@ public enum PiEndpoint: Codable, Equatable, Sendable {
     public func makeTransport() throws -> PiTransport {
         switch self {
         case .command(let configured):
+            #if os(macOS)
             let argv = PiProcessTransport.continuing(configured)
             guard let executable = argv.first else { throw PiTransportError.notRunning }
             return PiProcessTransport(executable: URL(fileURLWithPath: executable), arguments: Array(argv.dropFirst()))
+            #else
+            // An iPhone can't run commands (ssh, socat); it reaches hosts over TCP only.
+            _ = configured
+            throw PiTransportError.notRunning
+            #endif
         case .tcp(let host, let port):
             return PiTCPTransport(host: host, port: port)
         }

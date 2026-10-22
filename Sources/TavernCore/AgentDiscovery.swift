@@ -93,7 +93,7 @@ public enum AgentDiscovery {
     static let cardGlobs = [".config/pi-bundle/agents/*.json", ".config/pi-bundle/roster-member.json", ".config/pi-bundle/*/roster-member.json"]
 
     /// Reads cards on this Mac. Checks each host's port so the list can say which ones are up.
-    public static func local(home: URL = FileManager.default.homeDirectoryForCurrentUser) async -> [DiscoveredAgent] {
+    public static func local(home: URL = TavernPaths.userHome) async -> [DiscoveredAgent] {
         var files: [(String, Data)] = []
         let fm = FileManager.default
         for glob in cardGlobs {
@@ -203,7 +203,10 @@ public enum AgentDiscovery {
 
     /// Runs a command and returns its stdout, or throws when it fails or runs past `timeout` seconds.
     private static func run(_ argv: [String], timeout: Int) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
+        #if !os(macOS)
+        throw TailscaleReader.ReadError.notInstalled
+        #else
+        return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 do {
                     let process = Process()
@@ -226,6 +229,7 @@ public enum AgentDiscovery {
                 }
             }
         }
+        #endif
     }
 
     /// Whether something accepts connections on 127.0.0.1:`port` within a second.

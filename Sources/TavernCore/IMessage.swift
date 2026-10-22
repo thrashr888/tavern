@@ -85,6 +85,7 @@ public struct CiderMessages: Sendable {
     }
 
     private func run(_ arguments: [String]) async throws -> Data {
+        #if os(macOS)
         let program = cider
         return try await Task.detached {
             let process = Process()
@@ -102,6 +103,9 @@ public struct CiderMessages: Sendable {
             }
             return data
         }.value
+        #else
+        throw CiderError(message: "Messages are read on a Mac")
+        #endif
     }
 }
 
