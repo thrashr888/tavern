@@ -526,14 +526,20 @@ private struct ProxyBannerRow: View {
 }
 
 /// The party portrait, `portrait.png` in Application Support; nothing when there isn't one.
-/// It appears only on the Dashboard (the user: the image is global).
+/// It appears only on the Dashboard (the user: the image is global). Full width, at most
+/// `maxHeight` tall: a wide window crops the top and keeps the party and its name strip.
 private struct PortraitView: View {
+    private let maxHeight: CGFloat = 380
+
     var body: some View {
         if let image = PartyArt.portrait {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
+            Color.clear
+                .aspectRatio(image.size.width / max(image.size.height, 1), contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: maxHeight)
+                .overlay(alignment: .bottom) {
+                    Image(nsImage: image).resizable().scaledToFill()
+                }
+                .clipped()
                 .overlay(alignment: .bottom) {
                     // Soften the edge into the page.
                     LinearGradient(colors: [.clear, Color(nsColor: .windowBackgroundColor).opacity(0.9)],
