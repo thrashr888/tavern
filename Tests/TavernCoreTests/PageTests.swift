@@ -3,7 +3,8 @@ import XCTest
 
 final class PageTests: XCTestCase {
     func testStorageKeysRoundTrip() {
-        let pages: [Page] = [.dashboard, .settings, .goals, .agent(id: "tally"), .mail(project: nil), .mail(project: "tavern")]
+        let pages: [Page] = [.dashboard, .settings, .goals, .agent(id: "tally"), .mail(project: nil), .mail(project: "tavern"),
+                             .spellbook(spell: nil), .spellbook(spell: "SB-20")]
         for page in pages {
             XCTAssertEqual(Page(storageKey: page.storageKey), page)
         }

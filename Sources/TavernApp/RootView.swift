@@ -32,6 +32,8 @@ struct RootView: View {
                 GoalsView(page: $selection)
             case .services:
                 ServicesView()
+            case .spellbook(let spell):
+                SpellbookView(book: model.spellbook, page: $selection, spellID: spell)
             }
         }
         .toolbar(.hidden, for: .windowToolbar)
@@ -93,6 +95,7 @@ struct RootView: View {
         .task { await model.watchWake() }
         .task { await model.startMail() }
         .task { model.startNotifications() }
+        .task(id: "\(model.roster.spellbookRepo ?? "")#\(model.roster.spellbookBranch ?? "")") { await model.spellbook.watch(roster: model.roster) }
         .onChange(of: selection) { _, newValue in
             if let newValue { pageKey = newValue.storageKey }
             searching = false // a click in the sidebar is a click outside ⌘K too
@@ -105,6 +108,12 @@ struct SidebarView: View {
     @EnvironmentObject private var modifiers: ModifierWatcher
     @Binding var selection: Page?
 
+    /// The Spellbook row stays selected while a spell is open on it.
+    private var spellbookPage: Page {
+        if case .spellbook = selection { return selection ?? .spellbook(spell: nil) }
+        return .spellbook(spell: nil)
+    }
+
     var body: some View {
         List(selection: $selection) {
             SidebarLink(selection: selection, value: Page.dashboard) {
@@ -112,6 +121,11 @@ struct SidebarView: View {
             }
             SidebarLink(selection: selection, value: Page.goals) {
                 row { Label("Goals", systemImage: "checklist") } hint: { ShortcutHint(page: .goals) }
+            }
+            if model.roster.spellbookRepo != nil {
+                SidebarLink(selection: selection, value: spellbookPage) {
+                    Label("Spellbook", systemImage: "book.closed")
+                }
             }
             Button {
                 NotificationCenter.default.post(name: .tavernOpenSearch, object: nil)

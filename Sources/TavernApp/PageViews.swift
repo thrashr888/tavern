@@ -57,6 +57,18 @@ struct DashboardView: View {
         }.joined(separator: " · ")
     }
 
+    /// A spell from a `spellbook_get` call, which names it by id or by name.
+    private func spellID(_ key: String) -> String {
+        model.spellbook.snapshot?.spells.first { $0.id == key || $0.name == key }?.id ?? key
+    }
+
+    /// The most cast spell this week, "SB-21 Delivery verification ×4".
+    private var topSpell: String? {
+        guard let top = value.spells.first else { return nil }
+        let spell = model.spellbook.snapshot?.spells.first { $0.id == top.name || $0.name == top.name }
+        return "\(spell.map { "\($0.id) \($0.title)" } ?? top.name) ×\(top.count)"
+    }
+
     private func dollars(_ amount: Double) -> String { amount.formatted(.currency(code: "USD")) }
 
     /// The last 7 days, oldest first.
@@ -113,6 +125,12 @@ struct DashboardView: View {
                              detail: topSpender.map { "most: \($0)" },
                              spark: dailySeries { value.spend(on: $0) }) {
                         if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    if model.roster.spellbookRepo != nil || value.spellCasts > 0 {
+                        StatTile(title: "Spells cast · 7 days", value: "\(value.spellCasts)", symbol: "book.closed",
+                                 detail: topSpell.map { "most: \($0)" }) {
+                            selection = .spellbook(spell: value.spells.first.map { spellID($0.name) })
+                        }
                     }
                     StatTile(title: "Shipped · 7 days", value: "\(value.shipped.count)", symbol: "shippingbox.and.arrow.backward",
                              detail: shippedSummary) {

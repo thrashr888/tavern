@@ -71,6 +71,7 @@ struct AgentInspectorView: View {
                     case .about:
                         IdentitySection(agent: agent, projects: model.roster.mailProjects,
                                         session: model.session(for: agent.id))
+                        AgentSpellsSection(member: agent, book: model.spellbook)
                         InfoCard(title: "Schedule") {
                             if let heartbeat = model.session(for: agent.id)?.config.heartbeat {
                                 InfoRow(label: "Heartbeat", value: heartbeat.summary)

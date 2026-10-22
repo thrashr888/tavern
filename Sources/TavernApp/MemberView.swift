@@ -88,6 +88,7 @@ private struct MemberInspector: View {
                 .frame(maxWidth: .infinity)
 
                 AgentTasksSection(agent: member)
+                AgentSpellsSection(member: member, book: model.spellbook)
 
                 InfoCard(title: "Identity") {
                     InfoRow(label: "Class", value: member.partyClass ?? "–")

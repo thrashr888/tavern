@@ -91,6 +91,8 @@ final class AppModel: ObservableObject {
     @Published var dashboardStats: DashboardStats?
     /// Tavern's own MCP server, for the home agent (the Pi agent on this Mac).
     lazy var mcp = TavernMCP(model: self)
+    /// The party's spells, from Tavern's read-only clone of the spellbook repo.
+    let spellbook = SpellbookStore()
     /// Each iMessage conversation as last read, by handle.
     @Published var imessageHistory: [String: [IMessage]] = [:]
     /// Linear issue details, workflow states and projects as last read.
