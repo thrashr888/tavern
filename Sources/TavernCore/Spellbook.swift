@@ -372,8 +372,8 @@ public struct SpellRun: Codable, Equatable, Identifiable, Sendable {
         self.startedAt = startedAt
     }
 
-    public init(spell: Spell, document: SpellDocument, commit: String?, agentID: String?, issue: String? = nil, startedAt: Date = Date()) {
-        self.init(parts: [Part(spell: spell, document: document)], commit: commit, agentID: agentID, issue: issue, startedAt: startedAt)
+    public init(spell: Spell, document: SpellDocument, commit: String?, agentID: String?, issue: String? = nil, message: String? = nil, startedAt: Date = Date()) {
+        self.init(parts: [Part(spell: spell, document: document)], commit: commit, agentID: agentID, issue: issue, message: message, startedAt: startedAt)
     }
 
     public var spellID: String { parts.first?.spellID ?? "" }
