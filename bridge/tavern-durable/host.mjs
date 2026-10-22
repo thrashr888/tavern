@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { Approvals, approvalExtension } from "./approvals.mjs";
 import { ASK_PREFIX, askExtension } from "./ask.mjs";
 import { Judge } from "./judge.mjs";
+import { capabilities } from "./capabilities.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -48,6 +49,9 @@ const approvals = new Approvals((dialog) => dialog && broadcast(dialogRequest(di
 // MCP servers from <AGENT_CWD>/.pi/mcp.json become agent tools; their changes ask like risky shell.
 const mcpServers = await startServers({ cwd: AGENT_CWD, file: process.env.TAVERN_DURABLE_MCP, log });
 const mcp = mcpExtension(mcpServers);
+// What the machine offers (MCP servers, containers, CLIs), for the agent's card; refreshed now and then.
+let machine = await capabilities(mcpServers);
+setInterval(async () => { machine = await capabilities(mcpServers); }, 5 * 60_000).unref();
 // PAP's start_task and finish_task only file the agent's calls under a task; they change nothing
 // the user has, so they don't ask. Its run (and send_feedback) still do.
 const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
@@ -133,7 +137,7 @@ async function handle(socket, line) {
         const { model, thinkingLevel } = agentStateOf(current);
         return reply(true, { sessionId: String(current.session?.id ?? "durable"), isStreaming: live.busy, durable: true, model, thinkingLevel,
                              heartbeat: heartbeatState(), usage: usageOf(current),
-                             pendingApprovals: approvals.size });
+                             pendingApprovals: approvals.size, capabilities: machine });
       }
       case "get_entries": {
         const entries = entriesSince(piEntries(current), command.since);
