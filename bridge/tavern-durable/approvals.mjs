@@ -46,7 +46,7 @@ const SECRET_PATHS = [
   /\.(pem|key|p12|keychain(-db)?)$/,
   /(^|\/)Library\/LaunchAgents(\/|$)/,
   // Heartbeat checks run without asking, so changing what they call needs Paul.
-  /(^|\/)\.?heartbeat(-state)?\.json$/i, // any case: macOS paths ignore it
+  /(^|\/)\.?heartbeat(-state|-schedule)?\.json$/i, // any case: macOS paths ignore it
 ];
 
 /**

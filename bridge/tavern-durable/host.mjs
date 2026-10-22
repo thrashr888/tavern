@@ -20,6 +20,7 @@ import { Approvals, approvalExtension } from "./approvals.mjs";
 import { ASK_PREFIX, askExtension } from "./ask.mjs";
 import { Judge } from "./judge.mjs";
 import { capabilities } from "./capabilities.mjs";
+import { savedMinutes, selfExtension } from "./self.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -34,7 +35,8 @@ const DEBUG = process.env.TAVERN_DURABLE_DEBUG === "1";
 // Heartbeat: every N minutes (default 30). With <AGENT_CWD>/heartbeat.json the host runs its
 // checks itself (no model) and wakes the agent only for new items, with HEARTBEAT.md as the
 // instructions; without it, the agent gets HEARTBEAT.md every beat. 0 turns it off.
-const HEARTBEAT_MINUTES = Number(process.env.TAVERN_DURABLE_HEARTBEAT_MINUTES ?? 30);
+// The agent can change it (heartbeat_set, after Paul allows it); its choice is kept in heartbeat-schedule.json.
+let heartbeatMinutes = savedMinutes(AGENT_CWD, Number(process.env.TAVERN_DURABLE_HEARTBEAT_MINUTES ?? 30));
 const HEARTBEAT_FILE = path.join(AGENT_CWD, "HEARTBEAT.md");
 // Risky tool calls wait for Paul: "risky" (default), "all" or "off". See approvals.mjs.
 const APPROVALS = process.env.TAVERN_DURABLE_APPROVALS ?? "risky";
@@ -61,7 +63,8 @@ const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && 
 // A decision model lets routine calls run unasked (judge.mjs); the agent's own folders are routine.
 const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_WORKSPACE, log });
 const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), mcp];
+const selfTools = selfExtension({ approvals, cwd: AGENT_CWD, name: process.env.AGENT_NAME, info: selfInfo, setMinutes: setHeartbeatMinutes });
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), selfTools, mcp];
 // continueSession throws when the folder has no session yet; the first run creates it.
 const durable = await runtime.openDurable({ cwd: AGENT_CWD, continueSession: true, extensions }).catch((error) => {
   if (!/No durable session exists/.test(String(error?.message))) throw error;
@@ -235,8 +238,8 @@ function heartbeatPrompt() {
 
 function heartbeatState() {
   const hasChecks = loadChecks(AGENT_CWD) != null;
-  if (HEARTBEAT_MINUTES <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
-  return { everyMinutes: HEARTBEAT_MINUTES, last: lastHeartbeat, next: nextHeartbeat,
+  if (heartbeatMinutes <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
+  return { everyMinutes: heartbeatMinutes, last: lastHeartbeat, next: nextHeartbeat,
            checks: hasChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors, week: beatsThisWeek(BEATS_LOG) } : null };
 }
 
@@ -263,13 +266,37 @@ async function heartbeat() {
   }
 }
 
+let heartbeatTimer = null;
 function scheduleHeartbeat(delayMs) {
-  if (HEARTBEAT_MINUTES <= 0) return;
+  clearTimeout(heartbeatTimer);
+  nextHeartbeat = null;
+  if (heartbeatMinutes <= 0) return;
   nextHeartbeat = new Date(Date.now() + delayMs).toISOString();
-  setTimeout(async () => {
+  heartbeatTimer = setTimeout(async () => {
     try { await heartbeat(); } catch (error) { log(`heartbeat failed: ${error?.message ?? error}`); }
-    scheduleHeartbeat(HEARTBEAT_MINUTES * 60_000);
-  }, delayMs).unref();
+    scheduleHeartbeat(heartbeatMinutes * 60_000);
+  }, delayMs);
+  heartbeatTimer.unref();
+}
+
+function setHeartbeatMinutes(minutes) {
+  heartbeatMinutes = minutes;
+  scheduleHeartbeat(minutes * 60_000);
+  log(minutes ? `heartbeat every ${minutes} min` : "heartbeat paused");
+}
+
+/** What the agent's my_info tool reads: Tavern's info panel, from the agent's side. */
+function selfInfo() {
+  const current = view.current();
+  const { model, thinkingLevel } = agentStateOf(current);
+  return {
+    model, thinkingLevel, usage: usageOf(current),
+    heartbeat: { everyMinutes: heartbeatMinutes, paused: heartbeatMinutes <= 0, file: heartbeatPrompt() ? HEARTBEAT_FILE : null,
+                 checks: loadChecks(AGENT_CWD) ? path.join(AGENT_CWD, "heartbeat.json") : null, ...(heartbeatState() ?? {}) },
+    folders: { session: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_WORKSPACE ?? null },
+    approvals: { policy: APPROVALS, waiting: approvals.size },
+    machine,
+  };
 }
 // First beat five minutes after start, so a restart doesn't fire one immediately.
 scheduleHeartbeat(Number(process.env.TAVERN_DURABLE_HEARTBEAT_FIRST_MS ?? 5 * 60_000));
