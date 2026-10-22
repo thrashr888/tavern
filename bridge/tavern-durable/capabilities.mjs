@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /** Tools worth showing when the agent's PATH has them. */
-export const CLIS = ["gh", "glab", "git", "cider", "moff", "docker", "node", "python3", "uv", "cargo", "swift", "xcodebuild", "jq", "rg", "ollama", "terraform"];
+export const CLIS = ["gh", "glab", "git", "cider", "moff", "docker", "node", "python3", "uv", "cargo", "swift", "xcodebuild", "jq", "rg", "ollama", "terraform", "tfctl"];
 
 /** The CLIs found on `pathList` (a PATH string). */
 export function installedClis(pathList = process.env.PATH ?? "", names = CLIS) {
