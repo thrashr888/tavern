@@ -91,7 +91,12 @@ private struct CardWebView: NSViewRepresentable {
         // but data: and the card's declared image hosts, whatever the page's markup does.
         let page = page
         Task { @MainActor in
-            if let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) { controller.add(rules) }
+            // Fail closed: no rules, no page.
+            guard let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) else {
+                view.loadHTMLString("<p style='font:12px -apple-system;color:gray'>This card couldn't be shown safely.</p>", baseURL: nil)
+                return
+            }
+            controller.add(rules)
             view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
         }
         return view
@@ -128,7 +133,7 @@ private struct CardWebView: NSViewRepresentable {
     /// The page with Tavern's content policy first in `<head>`. Policies only add up, so a policy
     /// the page carries can tighten this one but never loosen it.
     static func withPolicy(_ page: ToolCardPage) -> String {
-        let images = (["data:"] + page.imageDomains).joined(separator: " ")
+        let images = (["data:"] + CardNetworkRules.hosts(page.imageDomains).map { "https://\($0)" }).joined(separator: " ")
         let policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src \(images); font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
         let meta = "<meta http-equiv=\"Content-Security-Policy\" content=\"\(policy)\">"
         if let head = page.html.range(of: "<head>", options: .caseInsensitive) {
@@ -301,21 +306,37 @@ enum CardHeights {
 enum CardNetworkRules {
     private static var cache: [String: WKContentRuleList] = [:]
 
+    /// A card's declared image hosts that are plain hostnames ("avatars.example.com", or an
+    /// https origin of one); anything else ("*", "https:", quotes, paths) is dropped.
+    static func hosts(_ imageDomains: [String]) -> [String] {
+        imageDomains.compactMap { value in
+            let host = value.hasPrefix("https://") ? URL(string: value)?.host : value
+            guard let host = host?.lowercased(), host.contains("."),
+                  host.range(of: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", options: .regularExpression) != nil
+            else { return nil }
+            return host
+        }.sorted()
+    }
+
     static func list(imageDomains: [String]) async -> WKContentRuleList? {
-        let hosts = imageDomains.compactMap { URL(string: $0)?.host ?? ($0.contains("/") ? nil : $0) }.sorted()
+        let hosts = hosts(imageDomains)
         let key = hosts.joined(separator: ",")
         if let cached = cache[key] { return cached }
         var rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
-            ["trigger": ["url-filter": "^(data|about):"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^data:"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^about:"], "action": ["type": "ignore-previous-rules"]],
         ]
         for host in hosts {
-            let escaped = NSRegularExpression.escapedPattern(for: host)
-            rules.append(["trigger": ["url-filter": "^https://\\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
+            let escaped = host.replacingOccurrences(of: ".", with: "\\.")
+            rules.append(["trigger": ["url-filter": "^https://\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
         }
         guard let data = try? JSONSerialization.data(withJSONObject: rules), let json = String(data: data, encoding: .utf8) else { return nil }
-        let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "tavern.cards.\(key.hashValue)", encodedContentRuleList: json)
-        if let list { cache[key] = list }
+        let identifier = "tavern.cards." + (key.isEmpty ? "none" : key)
+        guard let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) else {
+            return nil
+        }
+        cache[key] = list
         return list
     }
 }
