@@ -70,35 +70,19 @@ struct ThemePalette {
     var accent: Color
     /// Text on the accent, such as the selected sidebar row.
     var onAccent: Color
-    /// The same palette as CSS, for cards (SEP-1865 `--color-*` variables).
-    var cardVariables: [String: String] = [:]
 
     static let parchment = ThemePalette(
         page: Color(red: 0.953, green: 0.910, blue: 0.812),
         sidebar: Color(red: 0.882, green: 0.812, blue: 0.659),
         ink: Color(red: 0.231, green: 0.165, blue: 0.102),
         accent: Color(red: 0.545, green: 0.290, blue: 0.110),
-        onAccent: Color(red: 0.980, green: 0.953, blue: 0.890),
-        cardVariables: [
-            "--color-text-primary": "#3b2a1a", "--color-text-secondary": "#7a6249",
-            "--color-background-secondary": "#eadbb8", "--color-border-primary": "rgba(59,42,26,0.16)",
-            "--color-text-info": "#8b4a1c", "--color-text-success": "#4f6b2a",
-            "--color-text-danger": "#9b2f1f", "--color-text-warning": "#a3660f",
-            "--font-sans": "-apple-system, BlinkMacSystemFont, sans-serif",
-        ])
+        onAccent: Color(red: 0.980, green: 0.953, blue: 0.890))
     static let hearth = ThemePalette(
         page: Color(red: 0.165, green: 0.118, blue: 0.086),
         sidebar: Color(red: 0.118, green: 0.082, blue: 0.059),
         ink: Color(red: 0.933, green: 0.878, blue: 0.784),
         accent: Color(red: 0.882, green: 0.588, blue: 0.247),
-        onAccent: Color(red: 0.165, green: 0.098, blue: 0.051),
-        cardVariables: [
-            "--color-text-primary": "#eee0c8", "--color-text-secondary": "#b9a68a",
-            "--color-background-secondary": "#3a2a1f", "--color-border-primary": "rgba(238,224,200,0.14)",
-            "--color-text-info": "#e1963f", "--color-text-success": "#9bbf6a",
-            "--color-text-danger": "#e07a5f", "--color-text-warning": "#e8b45a",
-            "--font-sans": "-apple-system, BlinkMacSystemFont, sans-serif",
-        ])
+        onAccent: Color(red: 0.165, green: 0.098, blue: 0.051))
 }
 
 extension Color {

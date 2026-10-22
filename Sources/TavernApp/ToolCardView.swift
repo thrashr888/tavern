@@ -70,6 +70,9 @@ private struct CardWebView: NSViewRepresentable {
             window.parent = { postMessage: (message) => window.webkit.messageHandlers.mcp.postMessage(JSON.stringify(message)) };
             window.addEventListener("error", (e) => window.webkit.messageHandlers.mcp.postMessage(JSON.stringify({ method: "tavern/log", params: { message: String(e.message) + " @" + e.lineno } })));
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if let tint = Self.tintScript() {
+            controller.addUserScript(WKUserScript(source: tint, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
         controller.add(context.coordinator, name: "mcp")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
@@ -93,6 +96,19 @@ private struct CardWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: WKWebView, coordinator: CardHost) {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "mcp")
+    }
+
+    /// A party theme's tint, laid over the card by Tavern so any card follows the theme without
+    /// knowing about it: hues warmed toward sepia, then the page color multiplied in (Parchment:
+    /// white turns to parchment, ink stays ink) or screened in (Hearth: black turns to umber,
+    /// light text stays light).
+    static func tintScript() -> String? {
+        let theme = Theme.current
+        guard theme.palette != nil else { return nil }
+        let blend = theme == .parchment ? "multiply" : "screen"
+        let base = theme == .parchment ? "#f3e8cf" : "#2a1e16"
+        let css = "html{filter:sepia(.35) saturate(1.05)}html::after{content:'';position:fixed;inset:0;pointer-events:none;background:\(base);mix-blend-mode:\(blend);z-index:2147483647}"
+        return "(()=>{const s=document.createElement('style');s.textContent=\"\(css)\";(document.head||document.documentElement).appendChild(s);})();"
     }
 
     /// The page with Tavern's content policy first in `<head>`. Policies only add up, so a policy
@@ -127,17 +143,10 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         self.height = height
     }
 
-    /// SEP-1865 style variables for a party theme, so a card that only knows light and dark
-    /// still takes Parchment's or Hearth's colors. Empty otherwise: the card's own palette.
-    static var styles: JSONValue {
-        guard let css = Theme.current.palette?.cardVariables else { return .object([:]) }
-        return ["variables": .object(css.mapValues { .string($0) })]
-    }
-
     func setTheme(_ value: String) {
         guard value != theme else { return }
         theme = value
-        if initialized { notify("ui/notifications/host-context-changed", ["theme": .string(value), "styles": Self.styles]) }
+        if initialized { notify("ui/notifications/host-context-changed", ["theme": .string(value)]) }
     }
 
     // Only the card itself loads; links and redirects never navigate the frame.
@@ -165,7 +174,6 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 "hostCapabilities": ["openLinks": .object([:]), "serverTools": .object([:])],
                 "hostContext": [
                     "theme": .string(theme),
-                    "styles": Self.styles,
                     "displayMode": "inline",
                     "availableDisplayModes": .array(["inline"]),
                     "platform": "desktop",
