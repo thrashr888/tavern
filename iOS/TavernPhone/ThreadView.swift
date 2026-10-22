@@ -216,6 +216,8 @@ private struct RowView: View {
             }
         case .card(_, let card):
             CardView(card: card, session: session)
+        case .spell(_, let spell):
+            Label("Cast \(spell)", systemImage: "sparkles").font(.footnote).foregroundStyle(.secondary)
         }
     }
 }
