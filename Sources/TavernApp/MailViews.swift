@@ -43,12 +43,12 @@ private struct MailFeedView: View {
             ProxySignInPrompt(purpose: "to read \(model.roster.party) threads")
         default:
             // The thread list's width is the user's to drag, and stays put.
-            HSplitView {
-                threadList.frame(minWidth: 260, idealWidth: 340, maxWidth: 560)
+            ResizablePane("mail.threads", ideal: 340, range: 260...640) {
+                threadList
                     .onAppear(perform: takeFocusedThread)
                     .onChange(of: model.focusedMailThread) { _, _ in takeFocusedThread() }
-                    .splitAutosave("mail")
-                readingPane.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+            } rest: {
+                readingPane
             }
             .onReceive(NotificationCenter.default.publisher(for: .tavernRefresh)) { _ in Task { await feed.refresh() } }
         }

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Tavern",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .executable(name: "Tavern", targets: ["TavernApp"]),
         .library(name: "TavernCore", targets: ["TavernCore"]),

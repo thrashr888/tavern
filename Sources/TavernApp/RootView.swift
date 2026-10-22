@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 import TavernCore
 
 struct RootView: View {
@@ -16,7 +17,6 @@ struct RootView: View {
             SidebarView(selection: $selection)
                 .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
-                .splitAutosave("sidebar")
         } detail: {
             switch selection ?? .dashboard {
             case .dashboard:
@@ -426,10 +426,32 @@ enum PartyArt {
     private static var cache: [String: NSImage?] = [:]
 
     static var portrait: NSImage? { image("portrait") }
+
+    /// The part of the portrait worth keeping when it's cropped, as top and bottom fractions of
+    /// its height: what Vision's objectness saliency picks out (the party), else nil.
+    static var portraitFocus: ClosedRange<CGFloat>? {
+        if let hit = focusCache { return hit }
+        var found: ClosedRange<CGFloat>?
+        if let cg = portrait?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            let request = VNGenerateObjectnessBasedSaliencyImageRequest()
+            try? VNImageRequestHandler(cgImage: cg).perform([request])
+            let boxes = request.results?.first?.salientObjects?.map(\.boundingBox) ?? []
+            if let union = boxes.dropFirst().reduce(boxes.first, { $0?.union($1) }) {
+                // Vision's origin is bottom-left.
+                found = (1 - union.maxY)...(1 - union.minY)
+            }
+        }
+        focusCache = .some(found)
+        return found
+    }
+    private static var focusCache: ClosedRange<CGFloat>??
     static func avatar(_ id: String) -> NSImage? { image("avatars/\(id)") }
 
     /// Forgets loaded art, after Settings changes it.
-    static func reload() { cache.removeAll() }
+    static func reload() {
+        cache.removeAll()
+        focusCache = nil
+    }
 
     /// Sets `portrait` or `avatars/<id>` from an image file the user picked (saved as PNG), or
     /// removes it when `source` is nil. The new image is read and written before any old file

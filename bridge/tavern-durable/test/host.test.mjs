@@ -15,6 +15,7 @@ test("Tavern's RPC subset works against a durable session", async () => {
   const host = spawn(process.execPath, [here("../host.mjs")], {
     env: {
       ...process.env,
+      TAVERN_DURABLE_JUDGE: "off",
       TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
       TAVERN_DURABLE_PORT: String(port),
       TAVERN_DURABLE_REQUESTS: requestsFile,
@@ -84,6 +85,7 @@ test("heartbeats run HEARTBEAT.md on schedule and events become follow-ups", asy
   const host = spawn(process.execPath, [here("../host.mjs")], {
     env: {
       ...process.env,
+      TAVERN_DURABLE_JUDGE: "off",
       TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
       TAVERN_DURABLE_PORT: String(port),
       TAVERN_DURABLE_REQUESTS: path.join(dir, "requests.json"),
@@ -142,6 +144,7 @@ test("risky tool calls wait for a confirm answer, and a reconnecting client is a
   const host = spawn(process.execPath, [here("../host.mjs")], {
     env: {
       ...process.env,
+      TAVERN_DURABLE_JUDGE: "off",
       TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
       TAVERN_DURABLE_PORT: String(port),
       TAVERN_DURABLE_REQUESTS: path.join(dir, "requests.json"),
@@ -209,6 +212,7 @@ test("ask puts a select or input question to Tavern and returns the answer", asy
   const host = spawn(process.execPath, [here("../host.mjs")], {
     env: {
       ...process.env,
+      TAVERN_DURABLE_JUDGE: "off",
       TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
       TAVERN_DURABLE_PORT: String(port),
       TAVERN_DURABLE_REQUESTS: path.join(dir, "requests.json"),

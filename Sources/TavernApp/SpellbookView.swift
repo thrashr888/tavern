@@ -199,10 +199,8 @@ struct SpellbookView: View {
             } else if book.snapshot == nil {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
-                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260).splitAutosave("spellbook")
-                    spellList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
-                    detail.frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+                ResizablePane("spellbook.filters", ideal: 210, range: 170...320) { filters } rest: {
+                    ResizablePane("spellbook.list", ideal: 380, range: 260...640) { spellList } rest: { detail }
                 }
             }
         }

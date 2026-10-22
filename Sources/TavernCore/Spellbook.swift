@@ -299,7 +299,8 @@ public struct SpellbookRepo: Sendable {
     }
 
     private static func run(_ args: [String]) async throws -> String {
-        try await Task.detached {
+        #if os(macOS)
+        return try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
             // A stalled transfer gives up rather than hanging the refresh.
@@ -322,6 +323,9 @@ public struct SpellbookRepo: Sendable {
             }
             return String(decoding: data, as: UTF8.self)
         }.value
+        #else
+        throw SpellbookError(message: "The spellbook syncs on a Mac")
+        #endif
     }
 }
 

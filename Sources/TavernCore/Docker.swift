@@ -94,6 +94,7 @@ public struct DockerHost: Equatable, Identifiable, Sendable {
 
     /// Runs the listing. Throws with docker's own error text when it fails.
     public func containers() async throws -> [DockerContainer] {
+        #if os(macOS)
         let argv = self.argv
         return try await Task.detached {
             let process = Process()
@@ -116,6 +117,9 @@ public struct DockerHost: Equatable, Identifiable, Sendable {
             }
             return DockerContainer.parse(String(decoding: data, as: UTF8.self))
         }.value
+        #else
+        throw DockerError(message: "Docker is listed from a Mac")
+        #endif
     }
 }
 

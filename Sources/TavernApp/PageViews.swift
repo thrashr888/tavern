@@ -526,14 +526,28 @@ private struct ProxyBannerRow: View {
 }
 
 /// The party portrait, `portrait.png` in Application Support; nothing when there isn't one.
-/// It appears only on the Dashboard (the user: the image is global).
+/// It appears only on the Dashboard (the user: the image is global). Full width, at most
+/// `maxHeight` tall: a wide window crops it around the party (Vision's saliency), else from the
+/// top so heads stay in view.
 private struct PortraitView: View {
+    private let maxHeight: CGFloat = 380
+
     var body: some View {
         if let image = PartyArt.portrait {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
+            let aspect = image.size.width / max(image.size.height, 1)
+            Color.clear
+                .aspectRatio(aspect, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: maxHeight)
+                .overlay {
+                    GeometryReader { proxy in
+                        let fullHeight = proxy.size.width / aspect
+                        Image(nsImage: image)
+                            .resizable()
+                            .frame(width: proxy.size.width, height: fullHeight)
+                            .offset(y: -cropTop(visible: min(1, proxy.size.height / max(fullHeight, 1))) * fullHeight)
+                    }
+                }
+                .clipped()
                 .overlay(alignment: .bottom) {
                     // Soften the edge into the page.
                     LinearGradient(colors: [.clear, Color(nsColor: .windowBackgroundColor).opacity(0.9)],
@@ -541,6 +555,15 @@ private struct PortraitView: View {
                         .frame(height: 24)
                 }
         }
+    }
+
+    /// Where the crop starts, as a fraction of the image's height, when `visible` of it shows:
+    /// centered on the party if it fits, else from the party's top; from the image's top without one.
+    private func cropTop(visible: CGFloat) -> CGFloat {
+        guard visible < 1, let focus = PartyArt.portraitFocus else { return 0 }
+        let span = focus.upperBound - focus.lowerBound
+        let top = span <= visible ? (focus.lowerBound + focus.upperBound - visible) / 2 : focus.lowerBound
+        return min(max(top, 0), 1 - visible)
     }
 }
 
@@ -780,8 +803,7 @@ struct AgentThreadView: View {
             if let agent {
                 AgentInspectorView(agent: agent)
                     .inspectorClose($showInspector)
-                    .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
-                    .splitAutosave("inspector")
+                    .rememberedInspectorWidth(260...440)
             }
         }
     }

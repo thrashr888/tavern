@@ -1,69 +1,72 @@
 import AppKit
 import SwiftUI
 
-/// Keeps a split's dividers where the user dragged them, across pages and launches. SwiftUI's
-/// split views don't save through `NSSplitView.autosaveName`, so this finds the nearest enclosing
-/// `NSSplitView` (HSplitView, the inspector's split), puts its dividers back where they were last
-/// left, and saves them whenever they move.
-private struct SplitAutosaveView: NSViewRepresentable {
+/// A fixed-width pane beside the rest, with a divider the user drags. The width is Tavern's own
+/// setting (`tavern.column.<name>`), so it stays where it was left across pages and launches;
+/// SwiftUI's split views never kept it.
+struct ResizablePane<Pane: View, Rest: View>: View {
     let name: String
+    let range: ClosedRange<CGFloat>
+    @ViewBuilder let pane: () -> Pane
+    @ViewBuilder let rest: () -> Rest
+    @AppStorage private var width: Double
+    @State private var dragStart: Double?
 
-    func makeCoordinator() -> SplitMemory { SplitMemory(name: name) }
+    init(_ name: String, ideal: CGFloat, range: ClosedRange<CGFloat>,
+         @ViewBuilder pane: @escaping () -> Pane, @ViewBuilder rest: @escaping () -> Rest) {
+        self.name = name
+        self.range = range
+        self.pane = pane
+        self.rest = rest
+        _width = AppStorage(wrappedValue: Double(ideal), "tavern.column.\(name)")
+    }
 
-    func makeNSView(context: Context) -> NSView { NSView() }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        let memory = context.coordinator
-        DispatchQueue.main.async {
-            var node = view.superview
-            while let current = node, !(current is NSSplitView) { node = current.superview }
-            guard let split = node as? NSSplitView else { return }
-            memory.attach(to: split)
+    var body: some View {
+        HStack(spacing: 0) {
+            pane().frame(width: clamped)
+            Divider()
+                .overlay {
+                    // A wider grab area than the line itself.
+                    Color.clear.frame(width: 8).contentShape(Rectangle())
+                        .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
+                        .gesture(
+                            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                                .onChanged { drag in
+                                    let start = dragStart ?? Double(clamped)
+                                    dragStart = start
+                                    width = Double(min(max(CGFloat(start) + drag.translation.width, range.lowerBound), range.upperBound))
+                                }
+                                .onEnded { _ in dragStart = nil }
+                        )
+                }
+            rest().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
+
+    private var clamped: CGFloat { min(max(CGFloat(width), range.lowerBound), range.upperBound) }
 }
 
-@MainActor
-final class SplitMemory {
-    let name: String
-    private weak var split: NSSplitView?
-    private var observer: NSObjectProtocol?
-    private var restoring = false
-    private var key: String { "tavern.split.\(name)" }
+/// The inspector's width, kept across pages and launches: SwiftUI reads `ideal` when the panel
+/// appears, so the width the user left it at becomes the ideal next time.
+private struct InspectorWidth: ViewModifier {
+    let range: ClosedRange<CGFloat>
+    @AppStorage("tavern.column.inspector") private var width: Double = 310
 
-    init(name: String) { self.name = name }
-
-    func attach(to split: NSSplitView) {
-        guard self.split !== split else { return }
-        self.split = split
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        restore(split)
-        observer = NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: split, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.save() }
-        }
-    }
-
-    /// Divider positions, left to right; only saved when the user moved one (not window resizes
-    /// or our own restore).
-    private func save() {
-        guard !restoring, let split, NSEvent.pressedMouseButtons & 1 == 1 else { return }
-        let positions = split.arrangedSubviews.dropLast().map { split.isVertical ? Double($0.frame.maxX) : Double($0.frame.maxY) }
-        UserDefaults.standard.set(positions, forKey: key)
-    }
-
-    private func restore(_ split: NSSplitView) {
-        guard let positions = UserDefaults.standard.array(forKey: key) as? [Double],
-              positions.count == split.arrangedSubviews.count - 1 else { return }
-        // After SwiftUI's first layout, so its ideal widths don't win.
-        DispatchQueue.main.async {
-            self.restoring = true
-            for (index, position) in positions.enumerated() { split.setPosition(CGFloat(position), ofDividerAt: index) }
-            self.restoring = false
-        }
+    func body(content: Content) -> some View {
+        content
+            .inspectorColumnWidth(min: range.lowerBound, ideal: min(max(CGFloat(width), range.lowerBound), range.upperBound), max: range.upperBound)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.size.width) { _, new in
+                        // Only the user's drag changes it; ignore the first, laid-out-at-ideal size.
+                        if new >= range.lowerBound, new <= range.upperBound, abs(new - CGFloat(width)) > 1 { width = Double(new) }
+                    }
+                }
+            }
     }
 }
 
 extension View {
-    /// Remembers the widths of the split this view sits in, under `name`.
-    func splitAutosave(_ name: String) -> some View { background(SplitAutosaveView(name: name)) }
+    /// The inspector at the width the user last left it, between `range`'s bounds.
+    func rememberedInspectorWidth(_ range: ClosedRange<CGFloat>) -> some View { modifier(InspectorWidth(range: range)) }
 }

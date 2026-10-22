@@ -44,6 +44,8 @@ public struct PiAgentConfig: Equatable, Sendable {
     public var heartbeat: PiHeartbeat?
     /// Tokens and cost so far (durable hosts, from Pi Durable's usage document).
     public var usage: PiUsage?
+    /// What the agent's machine offers (durable hosts): MCP servers, containers, CLIs.
+    public var capabilities: PiCapabilities?
 
     public init(model: PiModel? = nil, thinkingLevel: String? = nil, sessionID: String? = nil, durable: Bool = false,
                 heartbeat: PiHeartbeat? = nil) {
@@ -63,6 +65,37 @@ public struct PiAgentConfig: Equatable, Sendable {
             heartbeat: PiHeartbeat(json: state?["heartbeat"])
         )
         usage = PiUsage(json: state?["usage"])
+        capabilities = PiCapabilities(json: state?["capabilities"])
+    }
+}
+
+/// What a durable host says its machine offers: its MCP servers with their tool counts, the
+/// running Docker containers (nil when Docker isn't there), and the well-known CLIs installed.
+public struct PiCapabilities: Equatable, Sendable {
+    public struct Server: Equatable, Sendable {
+        public var name: String
+        public var tools: Int
+    }
+
+    public var mcp: [Server]
+    public var docker: [String]?
+    public var clis: [String]
+
+    public init(mcp: [Server] = [], docker: [String]? = nil, clis: [String] = []) {
+        self.mcp = mcp
+        self.docker = docker
+        self.clis = clis
+    }
+
+    init?(json: JSONValue?) {
+        guard let json, json["mcp"] != nil || json["clis"] != nil else { return nil }
+        self.init(
+            mcp: (json["mcp"]?.arrayValue ?? []).compactMap { server in
+                server["name"]?.stringValue.map { Server(name: $0, tools: Int(server["tools"]?.doubleValue ?? 0)) }
+            },
+            docker: json["docker"]?.arrayValue?.compactMap(\.stringValue),
+            clis: (json["clis"]?.arrayValue ?? []).compactMap(\.stringValue)
+        )
     }
 }
 

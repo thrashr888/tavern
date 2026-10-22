@@ -72,6 +72,7 @@ struct AgentInspectorView: View {
                     case .about:
                         IdentitySection(agent: agent, projects: model.roster.mailProjects,
                                         session: model.session(for: agent.id))
+                        if let session = model.session(for: agent.id) { MachineSection(session: session) }
                         AgentSpellsSection(member: agent, book: model.spellbook)
                         InfoCard(title: "Schedule") {
                             if let heartbeat = model.session(for: agent.id)?.config.heartbeat {
@@ -292,6 +293,50 @@ private struct IdentitySection: View {
     private var projectNames: String? {
         guard let ids = agent.projects, !ids.isEmpty else { return nil }
         return ids.map { id in projects.first { $0.id == id }?.label ?? id }.joined(separator: ", ")
+    }
+}
+
+/// What the agent's machine offers, as its host reports it: MCP servers, containers, CLIs.
+private struct MachineSection: View {
+    @ObservedObject var session: PiAgentSession
+
+    var body: some View {
+        if let caps = session.config.capabilities {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Machine").tavernFont(.headline, weight: .semibold)
+                group("MCP servers", caps.mcp.map { $0.tools > 0 ? "\($0.name) · \($0.tools)" : $0.name }, icon: "puzzlepiece.extension")
+                if let docker = caps.docker {
+                    group("Docker", docker, icon: "shippingbox", empty: "No containers running")
+                }
+                group("Tools", caps.clis, icon: "terminal")
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary.opacity(0.8)))
+        }
+    }
+
+    @ViewBuilder
+    private func group(_ title: String, _ items: [String], icon: String, empty: String? = nil) -> some View {
+        if !items.isEmpty || empty != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(title, systemImage: icon).tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                if items.isEmpty, let empty {
+                    Text(empty).tavernFont(.caption).foregroundStyle(.tertiary)
+                } else {
+                    FlowLayout(spacing: 5, lineSpacing: 5) {
+                        ForEach(items, id: \.self) { item in
+                            Text(item)
+                                .tavernFont(.caption, weight: .medium)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.quaternary.opacity(0.6), in: Capsule())
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -37,7 +37,7 @@ struct PiThreadView: View {
     private var findMatchIDs: [String] {
         guard finding, !findQuery.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
         return session.rows.compactMap { row in
-            if case .message(let item) = row, findMatches(item.text + "\n" + item.thinking, findQuery) { return row.id }
+            if case .message(let item) = row, findMatches(item.text, findQuery) { return row.id }
             return nil
         }
     }
@@ -145,11 +145,13 @@ struct PiThreadView: View {
                     if let work = session.liveWork {
                         WorkRow(work: work, expandedAtStart: true)
                     }
-                    if !session.streamingText.isEmpty || !session.streamingThinking.isEmpty {
+                    if !session.streamingText.isEmpty {
                         TranscriptRow(item: TranscriptItem(
                             id: "streaming", role: .assistant, text: session.streamingText,
-                            thinking: session.streamingThinking, date: Date()
-                        ), thinkingExpanded: session.streamingText.isEmpty, showsLinks: false)
+                            thinking: "", date: Date()
+                        ), showsLinks: false)
+                    } else if session.isWorking && session.liveWork == nil {
+                        ThinkingIndicator()
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -178,7 +180,6 @@ struct PiThreadView: View {
                 session.returnedDraft = nil
             }
             .onChange(of: session.streamingText) { _, _ in proxy.scrollTo("bottom") }
-            .onChange(of: session.streamingThinking) { _, _ in proxy.scrollTo("bottom") }
             .onChange(of: session.liveSteps.count) { _, _ in proxy.scrollTo("bottom") }
         }
     }
@@ -288,8 +289,6 @@ struct PiThreadView: View {
 
 struct TranscriptRow: View {
     let item: TranscriptItem
-    /// Live thinking starts open so a long think visibly moves; stored thinking starts collapsed.
-    var thinkingExpanded = false
     /// Preview chips for the message's links; off while a reply streams in, half-written.
     var showsLinks = true
     /// The user's reactions to this reply; `onReact` is nil where reacting doesn't apply.
@@ -322,9 +321,6 @@ struct TranscriptRow: View {
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
-                if !item.thinking.isEmpty {
-                    ThinkingView(text: item.thinking, expanded: thinkingExpanded)
-                }
                 if !item.text.isEmpty {
                     MarkdownText(text: item.text)
                 }
@@ -734,31 +730,19 @@ extension PiStep.Kind {
     }
 }
 
-/// The model's thinking, dimmed and collapsible.
-private struct ThinkingView: View {
-    let text: String
-    @State private var expanded: Bool
-
-    init(text: String, expanded: Bool) {
-        self.text = text
-        _expanded = State(initialValue: expanded)
-    }
+/// While the agent works with nothing to show yet: a pulsing "Thinking". The thinking text itself
+/// stays out of the thread.
+private struct ThinkingIndicator: View {
+    @State private var pulse = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            Text(text)
-                .tavernFont(.callout)
-                .italic()
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 4)
-        } label: {
-            Label("Thinking", systemImage: "brain")
-                .tavernFont(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
+        Label("Thinking", systemImage: "brain")
+            .tavernFont(.caption)
+            .foregroundStyle(.secondary)
+            .opacity(pulse ? 1 : 0.35)
+            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
+            .padding(.horizontal, 12)
     }
 }
 
