@@ -160,6 +160,15 @@ final class SpellbookTests: XCTestCase {
         XCTAssertEqual(pov.spells, [ProofOfValue.ToolUse(name: "SB-21", count: 1)])
     }
 
+    func testIndexWithoutLifecycleOrGateStillLoads() throws {
+        let json = #"{"spells":[{"id":"SB-24","name":"friday-retro","title":"Friday retro","description":"Friday retro. Use when: Friday.","kind":"ritual","owner":"rook","review_owner":"rook","applies_to":["all"],"version":2,"path":"skills/friday-retro/SKILL.md"}]}"#
+        let spell = try XCTUnwrap(try SpellIndex.parse(Data(json.utf8)).spells.first)
+        XCTAssertEqual(spell.lifecycle, "live")
+        XCTAssertEqual(spell.gate, "none")
+        XCTAssertFalse(spell.isRetired)
+        XCTAssertTrue(spell.isRitual)
+    }
+
     func testChainedSpellIsTheLastOtherSpellTheStepsRun() {
         let document = SpellDocument.parse("""
         # Weekly update
