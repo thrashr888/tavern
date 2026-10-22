@@ -41,7 +41,8 @@ let heartbeatMinutes = savedMinutes(AGENT_CWD, Number(process.env.TAVERN_DURABLE
 const HEARTBEAT_FILE = path.join(AGENT_CWD, "HEARTBEAT.md");
 // Risky tool calls wait for Paul: "risky" (default), "all" or "off". See approvals.mjs.
 const APPROVALS = process.env.TAVERN_DURABLE_APPROVALS ?? "risky";
-// Standard Pi packages (`pi install`) load into the session unless this is "off".
+// Standard Pi packages load into the session: the agent's own (<AGENT_CWD>/.pi), "all" adds the
+// machine user's ~/.pi/agent ones, "off" loads none.
 const PI_EXTENSIONS = process.env.TAVERN_DURABLE_PI_EXTENSIONS ?? "on";
 
 // TAVERN_DURABLE_RUNTIME swaps in a fake runtime for tests.
@@ -340,7 +341,8 @@ async function loadPi() {
     const fake = await import(pathToFileURL(process.env.TAVERN_DURABLE_PI_LOADER).href);
     return fake.loadPiExtensions({ cwd: AGENT_CWD });
   }
-  return loadPiExtensions({ piRepo: PI_REPO, cwd: AGENT_CWD, log });
+  // "all" also loads what the machine's user installed for themselves in ~/.pi/agent.
+  return loadPiExtensions({ piRepo: PI_REPO, cwd: AGENT_CWD, scope: PI_EXTENSIONS === "all" ? "all" : "project", log });
 }
 
 /** Controller commands queue and may resolve only when done; answer now, report failures as notices. */

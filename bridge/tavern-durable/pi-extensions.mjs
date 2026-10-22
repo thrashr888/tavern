@@ -17,10 +17,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
- * Loads the extensions of the packages Pi's settings list (`pi install`), plus the agent's
- * `.pi/extensions/` and `~/.pi/agent/extensions/`, with Pi's own package manager and loader.
+ * Loads the extensions of the packages in the agent's own `<cwd>/.pi/settings.json` (and its
+ * `.pi/extensions/`) with Pi's own package manager and loader, installing any that are missing.
+ * Packages the machine's user installed for themselves (`~/.pi/agent`) stay out, so every agent
+ * gets what its bundle lists and nothing else; `scope: "all"` loads those too.
  */
-export async function loadPiExtensions({ piRepo, cwd, log = () => {} }) {
+export async function loadPiExtensions({ piRepo, cwd, scope = "project", log = () => {} }) {
   const src = path.join(piRepo, "packages/coding-agent/src");
   const load = (file) => import(pathToFileURL(path.join(src, file)).href);
   const [{ getAgentDir }, { SettingsManager }, { DefaultPackageManager }, { loadExtensions }, { ModelRuntime }, { ModelRegistry }] = await Promise.all([
@@ -33,8 +35,13 @@ export async function loadPiExtensions({ piRepo, cwd, log = () => {} }) {
   ]);
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(cwd, agentDir);
-  const resolved = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve(async () => "skip");
-  const paths = resolved.extensions.filter((r) => r.enabled && !r.path.startsWith("builtin:")).map((r) => r.path);
+  // Missing project packages (a fresh machine) install, as `pi install -l` would; others are skipped.
+  const own = new Set((settingsManager.getProjectSettings().packages ?? []).map((entry) => (typeof entry === "string" ? entry : entry?.source)));
+  const onMissing = async (source) => (own.has(source) ? (log(`installing pi package ${source}`), "install") : "skip");
+  const resolved = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve(onMissing);
+  const paths = resolved.extensions
+    .filter((r) => r.enabled && !r.path.startsWith("builtin:") && (scope === "all" || r.metadata?.scope === "project"))
+    .map((r) => r.path);
   const result = await loadExtensions(paths, cwd);
   for (const { path: file, error } of result.errors) log(`pi extension ${file} didn't load: ${error}`);
   // Only when something loaded: the registry reads pi's logins and model catalog.
