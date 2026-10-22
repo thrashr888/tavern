@@ -66,7 +66,12 @@ private struct CardWebView: UIViewRepresentable {
         // but data: and the card's declared image hosts, whatever the page's markup does.
         let page = page
         Task { @MainActor in
-            if let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) { controller.add(rules) }
+            // Fail closed: no rules, no page.
+            guard let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) else {
+                view.loadHTMLString("<p style='font:12px -apple-system;color:gray'>This card couldn't be shown safely.</p>", baseURL: nil)
+                return
+            }
+            controller.add(rules)
             view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
         }
         return view
@@ -80,7 +85,7 @@ private struct CardWebView: UIViewRepresentable {
 
     /// The page with Tavern's content policy first: no network, no frames, no forms.
     static func withPolicy(_ page: ToolCardPage) -> String {
-        let images = (["data:"] + page.imageDomains).joined(separator: " ")
+        let images = (["data:"] + CardNetworkRules.hosts(page.imageDomains).map { "https://\($0)" }).joined(separator: " ")
         let policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src \(images); font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
         let meta = "<meta http-equiv=\"Content-Security-Policy\" content=\"\(policy)\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         if let head = page.html.range(of: "<head>", options: .caseInsensitive) {
