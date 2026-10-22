@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 import TavernCore
 
-/// ⌘K palette (plan 3f): scope chips All, Agents, Pi threads, Mail, Linear. Local results come from
+/// ⌘K palette (plan 3f): scope chips All, Agents, Pi threads, Mail, Spells, Linear. Local results come from
 /// the FTS5 index and work offline; Linear is live and read-only. ↵ opens in Tavern, ⌘↵ in Gmail
 /// or Linear.
 struct SearchPalette: View {
     enum Scope: String, CaseIterable, Identifiable {
-        case all = "All", agents = "Agents", pi = "Pi threads", mail = "Mail", linear = "Linear"
+        case all = "All", agents = "Agents", pi = "Pi threads", mail = "Mail", spells = "Spells", linear = "Linear"
         var id: String { rawValue }
     }
 
@@ -40,7 +40,7 @@ struct SearchPalette: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search agents, Pi threads, mail and Linear", text: $query)
+                TextField("Search agents, Pi threads, mail, spells and Linear", text: $query)
                     .textFieldStyle(.plain)
                     .tavernFont(.title3)
                     .focused($focused)
@@ -128,7 +128,7 @@ struct SearchPalette: View {
             linearError = nil
             return
         }
-        local = themeResults(text) + agentResults(text) + storeResults(text)
+        local = themeResults(text) + agentResults(text) + spellResults(text) + storeResults(text)
         highlighted = results.first?.id
         // Debounce the network part.
         try? await Task.sleep(for: .milliseconds(250))
@@ -172,6 +172,28 @@ struct SearchPalette: View {
                 detail: [member.partyClass, member.host, member.kind == .pi ? "Pi agent" : "mail"].compactMap { $0 }.joined(separator: " · "),
                 page: member.kind == .pi ? .agent(id: member.id) : .mail(project: nil)
             )
+        }
+    }
+
+    /// Spells by id, title or trigger; retired ones only by their id.
+    /// "Wololo · Live", or "mentions <query>" when only the description matched (mock 3).
+    private func spellDetail(_ spell: Spell, needle: String) -> String {
+        let named = [spell.id, spell.title].contains { $0.lowercased().contains(needle) }
+        if !named, !needle.isEmpty { return "mentions \"\(needle)\"" }
+        let owner = spell.owner.map { model.roster.member(id: $0)?.name ?? $0.capitalized }
+        return [owner, spell.lifecycle.capitalized].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func spellResults(_ text: String) -> [Result] {
+        let needle = text.lowercased().trimmingCharacters(in: .whitespaces)
+        return (model.spellbook.snapshot?.spells ?? []).filter { spell in
+            spell.id.lowercased() == needle
+                || (!spell.isRetired && [spell.id, spell.title, spell.description].contains { $0.lowercased().contains(needle) })
+        }.map { spell in
+            Result(id: "spell:\(spell.id)", scope: .spells, icon: spell.isRitual ? "repeat" : "book.closed",
+                   title: "\(spell.id) \(spell.title)",
+                   detail: spellDetail(spell, needle: needle),
+                   page: .spellbook(spell: spell.id))
         }
     }
 

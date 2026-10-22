@@ -8,6 +8,8 @@ import TavernCore
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selection: Page?
+    /// The latest spells cast, by agents or from Tavern.
+    @State private var recentCasts: [SpellCast] = []
     private var stats: DashboardStats { model.dashboardStats ?? DashboardStats() }
 
     /// Distinct open tickets that some party member is on.
@@ -55,6 +57,18 @@ struct DashboardView: View {
             let count = value.shipped.filter { $0.kind == kind }.count
             return count > 0 ? "\(count) \(kind == .pullRequest ? "PR" : kind.rawValue.lowercased())\(count == 1 || kind == .pullRequest ? "" : "s")" : nil
         }.joined(separator: " · ")
+    }
+
+    /// A spell from a `spellbook_get` call, which names it by id or by name.
+    private func spellID(_ key: String) -> String {
+        model.spellbook.snapshot?.spells.first { $0.id == key || $0.name == key }?.id ?? key
+    }
+
+    /// The most cast spell this week, "SB-21 Delivery verification ×4".
+    private var topSpell: String? {
+        guard let top = value.spells.first else { return nil }
+        let spell = model.spellbook.snapshot?.spells.first { $0.id == top.name || $0.name == top.name }
+        return "\(spell.map { "\($0.id) \($0.title)" } ?? top.name) ×\(top.count)"
     }
 
     private func dollars(_ amount: Double) -> String { amount.formatted(.currency(code: "USD")) }
@@ -114,6 +128,12 @@ struct DashboardView: View {
                              spark: dailySeries { value.spend(on: $0) }) {
                         if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
                     }
+                    if model.roster.spellbookRepo != nil || value.spellCasts > 0 {
+                        StatTile(title: "Spells cast · 7 days", value: "\(value.spellCasts)", symbol: "book.closed",
+                                 detail: topSpell.map { "most: \($0)" }) {
+                            selection = .spellbook(spell: value.spells.first.map { spellID($0.name) })
+                        }
+                    }
                     StatTile(title: "Shipped · 7 days", value: "\(value.shipped.count)", symbol: "shippingbox.and.arrow.backward",
                              detail: shippedSummary) {
                         if let agent = value.shipped.first?.agentID ?? model.roster.piAgents.first?.id { selection = .agent(id: agent) }
@@ -144,6 +164,28 @@ struct DashboardView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                        }
+                    }
+                    section("Spells cast · 7 days") {
+                        if recentCasts.isEmpty { Text("No spells cast yet this week.").foregroundStyle(.secondary) }
+                        ForEach(recentCasts.prefix(8)) { cast in
+                            let spell = model.spellbook.spell(cast.spell)
+                            Button { selection = .spellbook(spell: spell?.id ?? cast.spell) } label: {
+                                HStack(spacing: 8) {
+                                    if let agent = cast.agentID.flatMap({ model.roster.member(id: $0) }) {
+                                        AvatarView(member: agent, size: 20, hoverCard: false)
+                                    } else {
+                                        Image(systemName: "person.crop.circle").foregroundStyle(.secondary).frame(width: 20)
+                                    }
+                                    Text(spell?.id ?? cast.spell).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                                    Text(spell?.title ?? cast.spell).lineLimit(1).truncationMode(.tail)
+                                    Spacer()
+                                    Text(cast.date.formatted(.relative(presentation: .numeric))).tavernFont(.caption).foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(cast.agentID.flatMap { model.roster.member(id: $0)?.name } ?? model.roster.owner) cast \(spell.map(\.citation) ?? cast.spell)\(cast.fromTavern ? " from Tavern" : "")")
                         }
                     }
                     section("Tools and cards · 7 days") {
@@ -206,6 +248,9 @@ struct DashboardView: View {
         .task {
             while !Task.isCancelled {
                 model.dashboardStats = DashboardStats(store: model.store, mail: model.mail, roster: model.roster)
+                if let store = model.store {
+                    recentCasts = SpellCast.recent(store: store, since: Date().addingTimeInterval(-7 * 86_400))
+                }
                 // Mail loads a moment after launch; check again soon until it has.
                 try? await Task.sleep(for: .seconds(stats.threadCount == 0 ? 3 : 30))
             }

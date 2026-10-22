@@ -15,6 +15,8 @@ public enum Page: Hashable, Sendable {
     case goals
     /// Docker containers on the Pi agents' machines, read-only.
     case services
+    /// The party's spells, read-only, with one open by its SB id (never its title).
+    case spellbook(spell: String?)
 
     public var storageKey: String {
         switch self {
@@ -25,6 +27,7 @@ public enum Page: Hashable, Sendable {
         case .settings: return "settings"
         case .goals: return "goals"
         case .services: return "services"
+        case .spellbook(let spell): return spell.map { "spellbook:\($0)" } ?? "spellbook"
         }
     }
 
@@ -35,6 +38,8 @@ public enum Page: Hashable, Sendable {
         case ("settings", 1): self = .settings
         case ("goals", 1): self = .goals
         case ("services", 1): self = .services
+        case ("spellbook", 1): self = .spellbook(spell: nil)
+        case ("spellbook", 2): self = .spellbook(spell: parts[1])
         case ("agent", 2): self = .agent(id: parts[1])
         case ("member", 2): self = .member(id: parts[1])
         case ("mail", 2): self = .mail(project: parts[1] == "all" ? nil : parts[1])

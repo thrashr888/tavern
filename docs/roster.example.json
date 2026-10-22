@@ -3,6 +3,7 @@
   "mailLabel": "Guild",
   "ownerName": "Sam",
   "linearTeam": "ENG",
+  "spellbookRepo": "https://github.com/EXAMPLE/agent-skills.git",
   "lore": [
     {
       "title": "Team handbook",

@@ -4,7 +4,7 @@ import Foundation
 /// knows and leaves everything else in the file (keys from a newer Tavern, hand-added notes) alone.
 public enum RosterFile {
     /// Top-level keys Settings owns. Anything else in the file is kept as it was.
-    static let rosterKeys = ["members", "mailProjects", "partyName", "mailLabel", "ownerName", "trustedSenders", "linearTeam", "lore"]
+    static let rosterKeys = ["members", "mailProjects", "partyName", "mailLabel", "ownerName", "trustedSenders", "linearTeam", "lore", "spellbookRepo", "spellbookBranch"]
     /// Member keys Settings owns; other keys on a member are kept.
     static let memberKeys = ["id", "name", "kind", "host", "partyClass", "animal", "summary", "skills", "avatarColor", "piLaunch",
                              "piEndpoint", "tailscaleName", "schedule", "projects", "platform", "owns", "mailFrom", "signOffs",

@@ -36,6 +36,7 @@ struct HeartbeatRow: View {
                         case .message(let item): TranscriptRow(item: item)
                         case .work(let work): WorkRow(work: work)
                         case .card(_, let card): ToolCardView(card: card, session: session)
+                        case .spell(_, let spell): SpellCastCard(spell: spell)
                         case .background: EmptyView()
                         }
                     }

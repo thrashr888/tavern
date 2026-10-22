@@ -627,6 +627,18 @@ final class FakePi: PiTransport, @unchecked Sendable {
 }
 
 final class ToolCardTests: XCTestCase {
+    func testSpellbookGetBecomesASpellRow() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let call = TranscriptItem(id: "a1", role: .assistant, text: "", date: at, toolCalls: [
+            PiToolCall(id: "c1", name: "spellbook__spellbook_get", arguments: ["id": "SB-21"]),
+        ])
+        let result = TranscriptItem(id: "r1", role: .tool, text: "…", date: at.addingTimeInterval(1), toolCallID: "c1",
+                                    toolName: "spellbook__spellbook_get")
+        let rows = PiActivity.rows(from: [call, result])
+        XCTAssertEqual(rows.last, .spell(id: "r1", spell: "SB-21"))
+        if case .work = rows.first {} else { XCTFail("the step still shows") }
+    }
+
     func testToolResultWithUIDetailsBecomesACardRow() throws {
         let call: JSONValue = ["type": "message", "id": "a1", "timestamp": "2026-10-19T10:00:00Z",
                                "message": ["role": "assistant", "content": .array([["type": "toolCall", "id": "c1", "name": "cider__weather_forecast", "arguments": ["days": .number(3)]]])]]

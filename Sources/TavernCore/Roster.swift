@@ -125,6 +125,10 @@ public struct Roster: Codable, Equatable, Sendable {
     public var linearTeam: String?
     /// The party's shared references (docs, sheets, boards), shown under Lore.
     public var lore: [LoreLink]?
+    /// The spellbook repo (git URL or local path) Tavern clones read-only for the Spellbook page.
+    public var spellbookRepo: String?
+    /// The spellbook branch to follow; nil follows the repo's default branch.
+    public var spellbookBranch: String?
 
     public init(members: [RosterMember], mailProjects: [MailProject], partyName: String? = nil, mailLabel: String? = nil,
                 ownerName: String? = nil, linearTeam: String? = nil, lore: [LoreLink]? = nil) {
