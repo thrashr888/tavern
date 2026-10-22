@@ -500,6 +500,7 @@ private struct PortraitView: View {
 }
 
 private struct PartyCard: View {
+    @EnvironmentObject private var model: AppModel
     let member: RosterMember
     let session: PiAgentSession?
     let lastSeen: Date?
@@ -513,6 +514,7 @@ private struct PartyCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(member.name).tavernFont(.callout, weight: .semibold)
+                        if model.roster.homeAgentID == member.id { HomeBadge() }
                         if let session { PresenceDot(session: session) }
                     }
                     Text(subtitle).tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1)

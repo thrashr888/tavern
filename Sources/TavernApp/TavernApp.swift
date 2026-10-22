@@ -89,6 +89,8 @@ final class AppModel: ObservableObject {
     @Published var containersRefreshedAt: Date?
     var containerRefresh: Task<Void, Never>?
     @Published var dashboardStats: DashboardStats?
+    /// Tavern's own MCP server, for the home agent (the Pi agent on this Mac).
+    lazy var mcp = TavernMCP(model: self)
     /// Each iMessage conversation as last read, by handle.
     @Published var imessageHistory: [String: [IMessage]] = [:]
     /// Linear issue details, workflow states and projects as last read.
@@ -269,6 +271,7 @@ final class AppModel: ObservableObject {
     /// configured Pi agent, so "waiting on you" reaches the user even when its page isn't open.
     func startNotifications() {
         alerts.requestPermission()
+        mcp.start()
         for agent in roster.piAgents {
             if let session = session(for: agent.id), session.presence == .disconnected {
                 Task { await session.connect() }

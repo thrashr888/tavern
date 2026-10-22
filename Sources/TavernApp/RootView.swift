@@ -240,6 +240,7 @@ private struct PiAgentRow: View {
 }
 
 private struct AgentRow: View {
+    @EnvironmentObject private var model: AppModel
     let agent: RosterMember
     let status: String
     var needs = 0
@@ -249,7 +250,10 @@ private struct AgentRow: View {
             AvatarView(member: agent, size: 40, hoverCard: false)
                 .overlay(alignment: .topTrailing) { NeedsDot(count: needs).offset(x: 3, y: -2) }
             VStack(alignment: .leading, spacing: 1) {
-                Text(agent.name).fontWeight(.semibold)
+                HStack(spacing: 4) {
+                    Text(agent.name).fontWeight(.semibold)
+                    if model.roster.homeAgentID == agent.id { HomeBadge() }
+                }
                 if let partyClass = agent.partyClass {
                     Text(partyClass).tavernFont(.caption).foregroundStyle(.secondary)
                 }
@@ -515,5 +519,15 @@ struct NeedsDot: View {
             .overlay(Capsule().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
             .accessibilityLabel(count == 1 ? "Needs you" : "\(count) things need you")
         }
+    }
+}
+
+/// Marks the home agent: the Pi agent on this Mac, which can set Tavern up through its tools.
+struct HomeBadge: View {
+    var body: some View {
+        Image(systemName: "house.fill")
+            .imageScale(.small)
+            .foregroundStyle(Color.tavernAccent)
+            .help("On this Mac: it can set up Tavern with Tavern's own tools, asking you first")
     }
 }

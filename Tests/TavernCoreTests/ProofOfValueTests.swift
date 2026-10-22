@@ -40,3 +40,12 @@ final class ProofOfValueTests: XCTestCase {
         XCTAssertEqual(pov.tools.map(\.name).sorted(), ["bash", "cider", "edit", "pap"])
     }
 }
+
+final class HomeAgentTests: XCTestCase {
+    func testTheLoopbackAgentIsHome() {
+        let remote = RosterMember(id: "ember", name: "Ember", kind: .pi, avatarColor: "#f00", piEndpoint: .tcp(host: "100.1.2.3", port: 19011))
+        let local = RosterMember(id: "flint", name: "Flint", kind: .pi, avatarColor: "#0f0", piEndpoint: .tcp(host: "127.0.0.1", port: 19011))
+        XCTAssertEqual(Roster(members: [remote, local], mailProjects: []).homeAgentID, "flint")
+        XCTAssertNil(Roster(members: [remote], mailProjects: []).homeAgentID)
+    }
+}
