@@ -1,7 +1,8 @@
 // A stand-in for Pi Durable's openDurable(): one conversation that answers each submit with a
 // short turn (thinking, a tool call, then text), driven by timers. "run: <command>" sends the
 // bash call through the extensions' beforeTool hooks first, as the real tool task does.
-// "ask: <json>" runs the extensions' ask tool with those arguments.
+// "ask: <json>" runs the extensions' ask tool with those arguments, "tool: <name> <json>" any tool,
+// and "sections" answers with the extensions' prompt sections as rendered for that request.
 export async function openDurable({ cwd, extensions = [] }) {
   const listeners = new Set();
   let entries = [
@@ -28,6 +29,11 @@ export async function openDurable({ cwd, extensions = [] }) {
     const tool = extensions.flatMap((e) => e.tools ?? []).find((t) => t.name === name);
     const result = await tool.execute(args, apiFor(taskId), { abortSignal: undefined });
     return result.content.map((c) => c.text).join("\n");
+  }
+  async function renderSections() {
+    const sections = extensions.flatMap((e) => e.sections ?? []);
+    const texts = await Promise.all(sections.map((section) => section.render({}, {})));
+    return texts.filter(Boolean).join("\n---\n") || "(no sections)";
   }
   async function beforeTool(call, taskId) {
     const api = {
@@ -60,7 +66,10 @@ export async function openDurable({ cwd, extensions = [] }) {
         const call = { id: `c${next}`, name: "bash", arguments: { command } };
         live = { generation: live.generation, tools: [call] };
         emit(); await step(20);
-        const answer = text.startsWith("ask: ") ? await runTool("ask", JSON.parse(text.slice(5)), `task-${next}`) : await beforeTool(call, `task-${next}`);
+        const answer = text.startsWith("ask: ") ? await runTool("ask", JSON.parse(text.slice(5)), `task-${next}`)
+          : text.startsWith("tool: ") ? await runTool(text.slice(6).split(" ")[0], JSON.parse(text.slice(6).split(" ").slice(1).join(" ") || "{}"), `task-${next}`)
+          : text === "sections" ? await renderSections()
+          : await beforeTool(call, `task-${next}`);
         live = { generation: { message: { role: "assistant", content: [{ type: "thinking", thinking: "Let me" }, { type: "text", text: answer }] } } };
         emit(); await step(20);
         entries = [...entries, { id: `e${next++}`, timestamp: Date.now(), message: { role: "assistant", content: [{ type: "text", text: answer }] } }];
@@ -68,7 +77,11 @@ export async function openDurable({ cwd, extensions = [] }) {
         emit();
       },
       async abort() {},
-      async compact() { notices = [...notices, { id: "n1", level: "info", message: "Compacted" }]; emit(); },
+      async compact() {
+        entries = [...entries, { id: `e${next++}`, kind: "pi.compaction", timestamp: Date.now() }];
+        notices = [...notices, { id: "n1", level: "info", message: "Compacted" }];
+        emit();
+      },
     },
     settings: {},
     async close() {},
