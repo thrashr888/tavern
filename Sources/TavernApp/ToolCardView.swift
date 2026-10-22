@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import TavernCore
 import WebKit
@@ -12,7 +13,14 @@ struct ToolCardView: View {
     @ObservedObject var session: PiAgentSession
     @State private var page: ToolCardPage?
     @State private var failure: String?
-    @State private var height: CGFloat = 120
+    @State private var height: CGFloat
+
+    init(card: ToolCard, session: PiAgentSession) {
+        self.card = card
+        self.session = session
+        // The size it last drew at, so scrolling back to it doesn't jump from a placeholder.
+        _height = State(initialValue: CardHeights.height(for: card) ?? 120)
+    }
 
     var body: some View {
         Group {
@@ -187,7 +195,11 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             notify("ui/notifications/tool-input", ["arguments": card.arguments])
             notify("ui/notifications/tool-result", ["content": .array([]), "structuredContent": card.structuredContent])
         case "ui/notifications/size-changed":
-            if let h = params["height"]?.doubleValue { height.wrappedValue = min(max(CGFloat(h), 40), 640) }
+            if let h = params["height"]?.doubleValue {
+                let value = min(max(CGFloat(h), 40), 640)
+                height.wrappedValue = value
+                CardHeights.remember(value, for: card)
+            }
         case "ui/open-link":
             if let raw = params["url"]?.stringValue, let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                 NSWorkspace.shared.open(url)
@@ -242,5 +254,37 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private func post(_ message: [String: JSONValue]) {
         guard let data = try? JSONValue.object(message).encoded(), let json = String(data: data, encoding: .utf8) else { return }
         webView?.evaluateJavaScript("window.dispatchEvent(new MessageEvent('message', { data: \(json) }))")
+    }
+}
+
+/// Each card's last drawn height, kept across launches (the newest 500), so a card shows at its
+/// real size right away instead of growing from a placeholder and pushing the thread around.
+@MainActor
+enum CardHeights {
+    private static let key = "tavern.cardHeights"
+    private static var heights: [String: Double] = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+    private static var order: [String] = UserDefaults.standard.stringArray(forKey: key + ".order") ?? []
+
+    static func id(_ card: ToolCard) -> String {
+        // A stable digest (String.hashValue changes every launch).
+        let content = (try? card.structuredContent.encoded()) ?? Data()
+        let digest = SHA256.hash(data: content).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "\(card.server)|\(card.resourceUri)|\(digest)"
+    }
+
+    static func height(for card: ToolCard) -> CGFloat? { heights[id(card)].map { CGFloat($0) } }
+
+    static func remember(_ height: CGFloat, for card: ToolCard) {
+        let id = id(card)
+        guard heights[id] != Double(height) else { return }
+        heights[id] = Double(height)
+        order.removeAll { $0 == id }
+        order.append(id)
+        if order.count > 500 {
+            for old in order.prefix(order.count - 500) { heights.removeValue(forKey: old) }
+            order.removeFirst(order.count - 500)
+        }
+        UserDefaults.standard.set(heights, forKey: key)
+        UserDefaults.standard.set(order, forKey: key + ".order")
     }
 }

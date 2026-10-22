@@ -12,6 +12,9 @@ struct PiThreadView: View {
     @State private var finding = false
     @State private var findQuery = ""
     @State private var findIndex = 0
+    /// How many of the newest rows the thread shows; reaching the top loads another page.
+    @State private var shownRows = PiThreadView.rowPage
+    static let rowPage = 150
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,7 +110,19 @@ struct PiThreadView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     let matches = findMatchIDs
                     let currentMatch = matches.indices.contains(findIndex) ? matches[findIndex] : nil
-                    ForEach(HeartbeatRun.grouped(session.rows)) { group in
+                    let groups = HeartbeatRun.grouped(session.rows)
+                    // The newest rows only; older ones load as you reach the top. Find shows all.
+                    let visible = finding ? groups[...] : groups.suffix(shownRows)
+                    if visible.count < groups.count {
+                        ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            .onAppear {
+                                let anchor = visible.first?.id
+                                shownRows += Self.rowPage
+                                // Stay on the row that was at the top, rather than jumping.
+                                if let anchor { DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) } }
+                            }
+                    }
+                    ForEach(visible) { group in
                         switch group {
                         case .heartbeats(let runs): HeartbeatGroupRow(runs: runs, session: session)
                         case .row(let row):
