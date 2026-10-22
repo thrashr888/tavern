@@ -719,8 +719,6 @@ private struct SpellRunSheet: View {
     @State private var issue: String?
     @State private var chain = true
     @State private var message = ""
-    /// Send the cast to the agent's thread, so the agent does the steps itself.
-    @State private var sendToAgent = true
     @State private var confirmGate = false
 
     var body: some View {
@@ -744,9 +742,10 @@ private struct SpellRunSheet: View {
         return VStack(alignment: .leading, spacing: 14) {
             Text("Cast · \(spell.id) \(spell.title)").tavernFont(.title3, weight: .semibold)
             VStack(alignment: .leading, spacing: 8) {
-                Text("Who's doing it").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
+                Text("Who casts it").tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary)
                 FlowLayout(spacing: 6) {
-                    Button(model.roster.owner) { agentID = nil }.buttonStyle(PillButtonStyle(selected: agentID == nil))
+                    Button { agentID = nil } label: { Label("Myself, as a checklist", systemImage: "checklist") }
+                        .buttonStyle(PillButtonStyle(selected: agentID == nil))
                     ForEach(members) { member in
                         Button { agentID = member.id } label: {
                             HStack(spacing: 6) { AvatarView(member: member, size: 20, hoverCard: false); Text(member.name) }
@@ -773,16 +772,16 @@ private struct SpellRunSheet: View {
                         Text("Add a message (optional)").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false)
                     }
                 }
-            if let member = agent, member.kind == .pi {
-                Toggle("Send it to \(member.name) to do now", isOn: $sendToAgent)
-                    .disabled(model.session(for: member.id) == nil)
+            if let member = agent, !sending {
+                Text("\(member.name) isn't connected, so this keeps a checklist here for you to tick off.")
+                    .tavernFont(.caption).foregroundStyle(.orange)
             }
             if spell.gate == "needs-paul" {
                 Label("Gated on \(model.roster.owner): start it only if you're giving that OK now.", systemImage: "hand.raised")
                     .tavernFont(.callout).foregroundStyle(.red)
             }
             HStack {
-                Text(sending ? "Sends the spell and your message to \(agent?.name ?? "")'s thread." : "Tavern keeps the record and sends nothing.")
+                Text(sending ? "\(agent?.name ?? "") gets the spell and your message in its thread and does the steps." : "You tick the steps off here. Tavern sends nothing.")
                     .tavernFont(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
@@ -798,8 +797,8 @@ private struct SpellRunSheet: View {
     private var agent: RosterMember? { agentID.flatMap { model.roster.member(id: $0) } }
 
     private var sending: Bool {
-        guard let agent, agent.kind == .pi, model.session(for: agent.id) != nil else { return false }
-        return sendToAgent
+        guard let agent, agent.kind == .pi else { return false }
+        return model.session(for: agent.id) != nil
     }
 
     /// Keeps the record; sent to an agent, the agent does the steps and the sheet closes.
