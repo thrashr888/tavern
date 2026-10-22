@@ -1,97 +1,27 @@
 import Foundation
 
-/// Pulls the party's labelled mail into the event log, read-only (plan step 6).
-///
-/// First run: a bounded full read of the label, stored with the mailbox history id taken *before*
-/// listing, so nothing that arrives during the read is skipped. Later runs: `history.list` since
-/// that id. An expired id (404) resets the cursor and does one bounded full read again; dedup on
-/// the Gmail message id makes the overlap harmless.
-///
-/// Main-actor bound like the Pi sessions, so every write to the shared SQLite connection (and its
-/// transactions) happens on one thread.
-@MainActor
-public struct GmailSync {
-    public static let cursorSource = "gmail"
-    public static let messageKind = "mail.message"
+/// One Gmail message as Personal Agent Proxy reads it, before it becomes a stored event.
+public struct GmailMessage: Equatable, Sendable {
+    public static let kind = "mail.message"
 
-    let api: GmailAPI
-    let store: EventStore
-    let roster: Roster
-    public var labelName: String
-    public var fullSyncLimit: Int
+    public var id: String
+    public var threadID: String
+    public var internalDate: Date
+    public var subject: String
+    public var from: String
+    public var snippet: String
+    public var body: String
+    /// In Sent: written from this Gmail account itself, which outside mail can't fake.
+    public var sentFromAccount = false
 
-    public init(api: GmailAPI, store: EventStore, roster: Roster, labelName: String? = nil, fullSyncLimit: Int = 300) {
-        self.api = api
-        self.store = store
-        self.roster = roster
-        self.labelName = labelName ?? roster.mailLabelName
-        self.fullSyncLimit = fullSyncLimit
-    }
-
-    /// Stores new mail and moves the cursor in the same transaction. Returns how many were new.
-    @discardableResult
-    public func sync() async throws -> Int {
-        let labelID = try await api.labelID(named: labelName)
-        guard let start = try store.cursor(for: Self.cursorSource) else {
-            return try await fullSync(labelID: labelID)
-        }
-        let page: GmailAPI.HistoryPage
-        do {
-            page = try await api.history(since: start, labelID: labelID)
-        } catch GmailError.http(status: 404, path: _) {
-            try store.resetCursor(source: Self.cursorSource)
-            return try await fullSync(labelID: labelID)
-        }
-        let messages = try await fetch(page.addedMessageIDs)
-        let added = try store.append(messages.map { event(for: $0) }, cursor: (Self.cursorSource, page.historyID ?? start))
-        try await refetchEmptyBodies()
-        return added
-    }
-
-    /// Mail stored before Tavern read HTML-only messages has an empty body; read those again
-    /// (a few per sync). A body still empty afterwards keeps Gmail's snippet so it isn't retried.
-    func refetchEmptyBodies(limit: Int = 40) async throws {
-        let empty = try store.events(source: EventSource.gmail).filter { event in
-            (try? JSONValue.decode(event.payload))?["body"]?.stringValue?.isEmpty ?? false
-        }
-        for stored in empty.prefix(limit) {
-            guard var message = try? await api.message(id: stored.sourceID) else { continue }
-            if MailItem.stripQuotedReply(message.body).isEmpty { message.body = message.snippet }
-            try store.replace(event(for: message))
-        }
-    }
-
-    public func archive(threadID: String) async throws {
-        try await api.archive(threadID: threadID)
-    }
-
-    /// Threads that still have a message in the inbox; everything else is archived.
-    public func inboxThreads() async throws -> Set<String> {
-        try await api.inboxThreadIDs(labelID: try await api.labelID(named: labelName))
-    }
-
-    private func fullSync(labelID: String) async throws -> Int {
-        guard let historyID = try await api.profileHistoryID() else { throw GmailError.http(status: 0, path: "profile") }
-        let ids = try await api.messageIDs(labelID: labelID, limit: fullSyncLimit)
-        let messages = try await fetch(ids)
-        return try store.append(messages.map { event(for: $0) }, cursor: (Self.cursorSource, historyID))
-    }
-
-    /// Fetches messages one by one; a message deleted since it was listed (404) is skipped.
-    private func fetch(_ ids: [String]) async throws -> [GmailMessage] {
-        var messages: [GmailMessage] = []
-        for id in ids {
-            do {
-                if let message = try await api.message(id: id) { messages.append(message) }
-            } catch GmailError.http(status: 404, path: _) {
-                continue
-            }
-        }
-        return messages
-    }
-
-    func event(for message: GmailMessage) -> TavernEvent {
-        MailItem.event(for: message, roster: roster)
+    public init(id: String, threadID: String, internalDate: Date, subject: String, from: String, snippet: String, body: String) {
+        self.id = id
+        self.threadID = threadID
+        self.internalDate = internalDate
+        self.subject = subject
+        self.from = from
+        self.snippet = snippet
+        self.body = body
     }
 }
 
@@ -107,8 +37,9 @@ public struct MailItem: Equatable, Identifiable, Sendable {
     public var snippet: String
     /// Body with the quoted reply chain cut off.
     public var body: String
-    /// The sender is proven, not just claimed: sent from this account, or a domain the receiving
-    /// server verified matches the From address. Only verified mail can trigger agents.
+    /// The sender is proven, not just claimed: sent from this account. (Mail synced before Tavern
+    /// went through Personal Agent Proxy may also be verified by Gmail's DMARC result.) Only
+    /// verified mail can trigger agents.
     public var verifiedSender = false
 
     public init(id: String, threadID: String, subject: String, from: String, author: String?, project: String?,
@@ -138,16 +69,14 @@ public struct MailItem: Equatable, Identifiable, Sendable {
             "body": .string(body),
         ]
         if let project { payload["project"] = .string(project) }
-        let domain = Roster.address(in: message.from)?.split(separator: "@").last.map(String.init)
-        let verified = message.sentFromAccount || (domain.map { d in message.verifiedDomains.contains(d) } ?? false)
-        if verified { payload["verifiedSender"] = .bool(true) }
+        if message.sentFromAccount { payload["verifiedSender"] = .bool(true) }
         return TavernEvent(
             source: EventSource.gmail,
             sourceID: message.id,
             threadKey: threadKey(message.threadID),
             authorAgent: author,
             sourceTS: message.internalDate,
-            kind: GmailSync.messageKind,
+            kind: GmailMessage.kind,
             payload: (try? JSONValue.object(payload).encoded()) ?? Data()
         )
     }
@@ -253,8 +182,12 @@ public struct MailThread: Equatable, Identifiable, Sendable {
         for author in messages.compactMap(\.author) where !seen.contains(author) { seen.append(author) }
         return seen
     }
-    /// Opens the thread in Gmail on the web.
-    public var gmailURL: URL? { URL(string: "https://mail.google.com/mail/u/0/#all/\(threadID)") }
+    /// Opens the thread in Gmail on the web. A thread known only by its subject opens at its
+    /// latest message, whose id Gmail also takes.
+    public var gmailURL: URL? {
+        let id = threadID.hasPrefix(PAPMailSync.subjectThreadPrefix) ? messages.last?.id ?? "" : threadID
+        return URL(string: "https://mail.google.com/mail/u/0/#all/\(id)")
+    }
 
     /// Agents' hourly "… Heartbeat" status mails: useful as presence, noise in the thread list.
     public var isHeartbeat: Bool { subject.localizedCaseInsensitiveContains("heartbeat") }

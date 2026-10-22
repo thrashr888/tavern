@@ -9,11 +9,60 @@ struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selection: Page?
     private var stats: DashboardStats { model.dashboardStats ?? DashboardStats() }
-    private var containersRunning: Int? { model.containersRunning }
 
     /// Distinct open tickets that some party member is on.
     private var agentTicketCount: Int {
         Set(model.roster.members.flatMap { model.tasks(for: $0) }.filter { $0.state != nil }.map(\.identifier)).count
+    }
+
+    private var value: ProofOfValue { stats.value }
+
+    private func isOnline(_ agent: RosterMember) -> Bool {
+        guard let presence = model.session(for: agent.id)?.presence else { return false }
+        return presence == .idle || presence == .working
+    }
+
+    private var onlineAgents: Int { model.roster.piAgents.filter(isOnline).count }
+    private var offlineNames: String { model.roster.piAgents.filter { !isOnline($0) }.map(\.name).joined(separator: ", ") }
+
+    /// Tasks sent from Tavern that have left Linear's open list.
+    private var finishedTasks: Int {
+        Set(model.roster.members.flatMap { model.tasks(for: $0) }.filter { $0.state == nil }.map(\.identifier)).count
+    }
+
+    /// The oldest mail ask still waiting (agents' dialogs carry no time).
+    private var oldestAsk: Date? { model.mailAsks.map(\.lastDate).min() }
+
+    /// Woke and quiet beats this week, from the agents' hosts that count them.
+    private var heartbeats: (woke: Int, quiet: Int)? {
+        let beats = model.roster.piAgents.compactMap { model.session(for: $0.id)?.config.heartbeat }
+            .filter { $0.wokeThisWeek != nil }
+        guard !beats.isEmpty else { return nil }
+        return (beats.reduce(0) { $0 + ($1.wokeThisWeek ?? 0) }, beats.reduce(0) { $0 + ($1.quietThisWeek ?? 0) })
+    }
+
+    private var topSpender: String? {
+        let today = Date()
+        let top = model.roster.piAgents.map { ($0.name, value.spend(agent: $0.id, on: today)) }.max { $0.1 < $1.1 }
+        guard let top, top.1 > 0 else { return nil }
+        return "\(top.0) \(dollars(top.1))"
+    }
+
+    private var shippedSummary: String? {
+        guard !value.shipped.isEmpty else { return nil }
+        let kinds: [ProofOfValue.Shipped.Kind] = [.pullRequest, .draft, .edit, .file]
+        return kinds.compactMap { kind in
+            let count = value.shipped.filter { $0.kind == kind }.count
+            return count > 0 ? "\(count) \(kind == .pullRequest ? "PR" : kind.rawValue.lowercased())\(count == 1 || kind == .pullRequest ? "" : "s")" : nil
+        }.joined(separator: " · ")
+    }
+
+    private func dollars(_ amount: Double) -> String { amount.formatted(.currency(code: "USD")) }
+
+    /// The last 7 days, oldest first.
+    private func dailySeries(_ value: (Date) -> Double) -> [Double] {
+        let today = Calendar.current.startOfDay(for: Date())
+        return (0..<7).reversed().map { value(today.addingTimeInterval(-Double($0) * 86_400)) }
     }
 
     var body: some View {
@@ -34,53 +83,82 @@ struct DashboardView: View {
                     NeedsYouSection(mail: mail, selection: $selection)
                 }
 
-                // Every tile opens the page behind its number.
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], alignment: .leading, spacing: 12) {
-                    StatTile(title: "Open goals", value: model.openIssues.isEmpty ? "–" : "\(model.openIssues.count)",
-                             symbol: "checklist") { selection = .goals }
-                    // Open tickets an agent is on: sent from Tavern, or labeled agent:<id> in Linear.
-                    StatTile(title: "With agents", value: model.openIssues.isEmpty ? "–" : "\(agentTicketCount)",
-                             symbol: "paperplane") { selection = .goals }
-                    StatTile(title: "Containers up", value: containersRunning.map(String.init) ?? "–",
-                             symbol: "shippingbox") { selection = .services }
-                    StatTile(title: "\(model.roster.party) threads", value: "\(stats.threadCount)", symbol: "tray.full") { selection = .mail(project: nil) }
-                    StatTile(title: "Mail this week", value: "\(stats.mailThisWeek)", symbol: "envelope") { selection = .mail(project: nil) }
-                    StatTile(title: "Pi messages this week", value: "\(stats.piThisWeek)", symbol: "bubble.left.and.bubble.right") {
+                // Proof of value: is the party working, and what needs you. Every tile opens
+                // the page behind its number.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], alignment: .leading, spacing: 12) {
+                    StatTile(title: "Agents online", value: "\(onlineAgents)/\(model.roster.piAgents.count)", symbol: "person.3",
+                             detail: offlineNames.isEmpty ? nil : "Down: \(offlineNames)") {
+                        if let down = model.roster.piAgents.first(where: { !isOnline($0) }) { selection = .agent(id: down.id) }
+                    }
+                    StatTile(title: "Goals open · with agents", value: model.openIssues.isEmpty ? "–" : "\(model.openIssues.count) · \(agentTicketCount)",
+                             symbol: "checklist", detail: finishedTasks > 0 ? "\(finishedTasks) finished by agents" : nil) { selection = .goals }
+                    StatTile(title: "Agent turns · 7 days", value: "\(value.turnsThisWeek)", symbol: "bubble.left.and.bubble.right",
+                             spark: dailySeries { day in Double(value.turnsDaily.filter { Calendar.current.isDate($0.day, inSameDayAs: day) }.reduce(0) { $0 + $1.count }) }) {
+                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    StatTile(title: "Approvals · 7 days", value: "\(value.approved + value.declined)", symbol: "hand.raised",
+                             detail: "\(value.approved) allowed · \(value.declined) denied") {
+                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    StatTile(title: "Waiting on you", value: "\(model.attention.count)", symbol: "exclamationmark.bubble",
+                             detail: oldestAsk.map { "oldest \($0.formatted(.relative(presentation: .numeric)))" }) {
+                        if let waiting = model.roster.piAgents.first(where: { model.session(for: $0.id)?.dialog != nil }) { selection = .agent(id: waiting.id) }
+                        else { selection = .mail(project: nil) }
+                    }
+                    StatTile(title: "Heartbeats · 7 days", value: heartbeats.map { "\($0.woke) woke" } ?? "\(value.heartbeatWakes) woke",
+                             symbol: "waveform.path.ecg", detail: heartbeats.map { "\($0.quiet) quiet, no model turn" }) {
+                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    StatTile(title: "Spend today", value: dollars(value.spend(on: Date())), symbol: "dollarsign.circle",
+                             detail: topSpender.map { "most: \($0)" },
+                             spark: dailySeries { value.spend(on: $0) }) {
+                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    StatTile(title: "Shipped · 7 days", value: "\(value.shipped.count)", symbol: "shippingbox.and.arrow.backward",
+                             detail: shippedSummary) {
+                        if let agent = value.shipped.first?.agentID ?? model.roster.piAgents.first?.id { selection = .agent(id: agent) }
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 24) {
+                    ActivityChart(title: "Agent turns · 14 days", counts: value.turnsDaily, roster: model.roster) {
+                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
+                    }
+                    ActivityChart(title: "Spend · 14 days", spend: value.spendDaily, roster: model.roster) {
                         if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
                     }
                 }
 
                 HStack(alignment: .top, spacing: 24) {
-                    ActivityChart(title: "\(model.roster.party) mail · 14 days", counts: stats.mailDaily, roster: model.roster) {
-                        selection = .mail(project: nil)
-                    }
-                    ActivityChart(title: "Pi messages · 14 days", counts: stats.piDaily, roster: model.roster) {
-                        if let first = model.roster.piAgents.first { selection = .agent(id: first.id) }
-                    }
-                }
-
-                HStack(alignment: .top, spacing: 24) {
-                    section("Mail per member · 7 days") {
-                        if stats.mailByMember.isEmpty {
-                            Text("No \(model.roster.party) mail stored yet.").foregroundStyle(.secondary)
-                        }
-                        ForEach(stats.mailByMember) { row in
-                            let member = model.roster.member(id: row.id)
-                            Button {
-                                selection = member?.kind == .pi ? .agent(id: row.id) : .mail(project: nil)
-                            } label: {
-                                MemberBar(member: member, name: row.id, count: row.count,
-                                          maximum: stats.mailByMember.first?.count ?? 1)
-                                    .contentShape(Rectangle())
+                    section("Shipped · 7 days") {
+                        if value.shipped.isEmpty { Text("Nothing shipped yet this week.").foregroundStyle(.secondary) }
+                        ForEach(value.shipped.prefix(8)) { item in
+                            Button { selection = .agent(id: item.agentID) } label: {
+                                HStack(spacing: 8) {
+                                    if let agent = model.roster.member(id: item.agentID) { AvatarView(member: agent, size: 20, hoverCard: false) }
+                                    Text(item.kind.rawValue).tavernFont(.caption, weight: .semibold).foregroundStyle(.secondary).frame(width: 58, alignment: .leading)
+                                    Text(item.title).lineLimit(1).truncationMode(.middle)
+                                    Spacer()
+                                    Text(item.date.formatted(.relative(presentation: .numeric))).tavernFont(.caption).foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                    section("Busiest threads · 7 days") {
-                        if stats.busiest.isEmpty {
-                            Text("Nothing yet.").foregroundStyle(.secondary)
+                    section("Tools and cards · 7 days") {
+                        if value.tools.isEmpty { Text("No tool calls yet.").foregroundStyle(.secondary) }
+                        ForEach(value.tools.prefix(6)) { tool in
+                            HStack {
+                                Text(tool.name).lineLimit(1)
+                                Spacer()
+                                Text("\(tool.count)").monospacedDigit().foregroundStyle(.secondary)
+                            }
                         }
-                        ForEach(stats.busiest, id: \.threadKey) { row in
+                    }
+                    section("Mail threads handled · 7 days") {
+                        if stats.handled.isEmpty { Text("No agent replies this week.").foregroundStyle(.secondary) }
+                        ForEach(stats.handled, id: \.threadKey) { row in
                             Button {
                                 model.focusedMailThread = row.threadID
                                 selection = .mail(project: nil)
@@ -90,6 +168,7 @@ struct DashboardView: View {
                                     Spacer()
                                     Text("\(row.count)").monospacedDigit().foregroundStyle(.secondary)
                                 }
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -160,6 +239,10 @@ struct DashboardStats {
     /// Per day and member (mail by author, Pi by agent), for the charts.
     var mailDaily: [DailyCount] = []
     var piDaily: [DailyCount] = []
+    /// What the agents got done and what it cost.
+    var value = ProofOfValue()
+    /// Party mail threads an agent wrote in this week.
+    var handled: [Busy] = []
 
     init() {}
 
@@ -191,6 +274,14 @@ struct DashboardStats {
         for agent in roster.piAgents {
             lastPiActivity[agent.id] = (try? store.events(threadKey: PiEntries.threadKey(agentID: agent.id)))?.last?.sourceTS
         }
+        value = ProofOfValue(store: store, now: now)
+        let agents = Set(roster.members.map(\.id))
+        handled = threads
+            .filter { $0.lastDate >= week && $0.messages.contains { $0.date >= week && ($0.author.map(agents.contains) ?? false) } }
+            .sorted { $0.lastDate > $1.lastDate }
+            .prefix(6)
+            .map { Busy(threadKey: MailItem.threadKey($0.threadID), threadID: $0.threadID, subject: $0.subject,
+                        count: $0.messages.filter { $0.date >= week }.count) }
     }
 }
 
@@ -343,6 +434,9 @@ private struct SetupBanner: View {
                     Button("Open Settings") { openSettings() }.buttonStyle(PillButtonStyle())
                 }
             }
+            if let feed = model.mail {
+                ProxyBannerRow(feed: feed)
+            }
             ForEach(model.discovered) { agent in
                 HStack(spacing: 10) {
                     Circle().fill(Color(hex: agent.card.avatarColor ?? "#6b5b95")).frame(width: 26, height: 26)
@@ -354,10 +448,35 @@ private struct SetupBanner: View {
                 }
             }
         }
-        .padding(model.hasRosterFile && model.discovered.isEmpty ? 0 : 14)
-        .background(model.hasRosterFile && model.discovered.isEmpty ? Color.clear : Color.accentColor.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 12))
+        .padding(quiet ? 0 : 14)
+        .background(quiet ? Color.clear : Color.tavernAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .task { if model.discovered.isEmpty { await model.discoverAgents() } }
+    }
+}
+
+extension SetupBanner {
+    /// Nothing to set up: no example party, no found agents, no sign-in waiting.
+    private var quiet: Bool {
+        model.hasRosterFile && model.discovered.isEmpty && model.mail?.state != .signedOut
+    }
+}
+
+/// "Sign in to Personal Agent Proxy for party mail and Linear", until it's done.
+private struct ProxyBannerRow: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var feed: MailFeed
+
+    var body: some View {
+        if feed.state == .signedOut || feed.state == .signingIn {
+            HStack(spacing: 10) {
+                Image(systemName: "person.badge.key").foregroundStyle(.tint)
+                Text("Sign in to Personal Agent Proxy for \(model.roster.party) mail and Linear.")
+                Spacer()
+                Button(feed.state == .signingIn ? "Waiting…" : "Sign In") { Task { await model.signInToProxy() } }
+                    .buttonStyle(PillButtonStyle(selected: true))
+                    .disabled(feed.state == .signingIn)
+            }
+        }
     }
 }
 
@@ -381,6 +500,7 @@ private struct PortraitView: View {
 }
 
 private struct PartyCard: View {
+    @EnvironmentObject private var model: AppModel
     let member: RosterMember
     let session: PiAgentSession?
     let lastSeen: Date?
@@ -394,6 +514,7 @@ private struct PartyCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(member.name).tavernFont(.callout, weight: .semibold)
+                        if model.roster.homeAgentID == member.id { HomeBadge() }
                         if let session { PresenceDot(session: session) }
                     }
                     Text(subtitle).tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -440,10 +561,28 @@ private struct PresenceDot: View {
 
 /// Bars per day, stacked by member in their avatar colors. Clicking opens the related page.
 private struct ActivityChart: View {
+    struct Point: Hashable { var day: Date; var key: String; var value: Double }
+
     let title: String
-    let counts: [DailyCount]
+    let counts: [Point]
     let roster: Roster
+    var dollars = false
     let open: () -> Void
+
+    init(title: String, counts: [DailyCount], roster: Roster, open: @escaping () -> Void) {
+        self.title = title
+        self.counts = counts.map { Point(day: $0.day, key: $0.key, value: Double($0.count)) }
+        self.roster = roster
+        self.open = open
+    }
+
+    init(title: String, spend: [ProofOfValue.DailySpend], roster: Roster, open: @escaping () -> Void) {
+        self.title = title
+        counts = spend.map { Point(day: $0.day, key: $0.key, value: $0.dollars) }
+        self.roster = roster
+        dollars = true
+        self.open = open
+    }
 
     var body: some View {
         Button(action: open) {
@@ -457,12 +596,18 @@ private struct ActivityChart: View {
                     Text("Nothing yet.").foregroundStyle(.secondary).frame(height: 140)
                 } else {
                     Chart(counts, id: \.self) { row in
-                        BarMark(x: .value("Day", row.day, unit: .day), y: .value("Count", row.count))
+                        BarMark(x: .value("Day", row.day, unit: .day), y: .value(dollars ? "Spend" : "Count", row.value))
                             .foregroundStyle(by: .value("Member", name(row.key)))
                             .cornerRadius(2)
                     }
                     .chartForegroundStyleScale(domain: members.map(\.name), range: members.map { Color(hex: $0.avatarColor) })
                     .chartXAxis { AxisMarks(values: .stride(by: .day, count: 2)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated)) } }
+                    .chartYAxis {
+                        AxisMarks { value in
+                            AxisGridLine()
+                            AxisValueLabel { if dollars, let v = value.as(Double.self) { Text(v, format: .currency(code: "USD").precision(.fractionLength(0))) } else if let v = value.as(Double.self) { Text("\(Int(v))") } }
+                        }
+                    }
                     .chartLegend(position: .bottom, alignment: .leading)
                     .frame(height: 160)
                 }
@@ -521,6 +666,10 @@ struct StatTile: View {
     let title: String
     let value: String
     var symbol: String?
+    /// A second line under the title, such as "oldest 3h" or "2 declined".
+    var detail: String? = nil
+    /// The last few days, oldest first, as a small line.
+    var spark: [Double] = []
     var action: (() -> Void)?
 
     var body: some View {
@@ -532,9 +681,20 @@ struct StatTile: View {
                     if let symbol { Image(systemName: symbol).foregroundStyle(.tertiary) }
                 }
                 Text(title).tavernFont(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                if let detail { Text(detail).tavernFont(.caption).foregroundStyle(.tertiary).lineLimit(1) }
+                if spark.count > 1 {
+                    Chart(Array(spark.enumerated()), id: \.offset) { point in
+                        LineMark(x: .value("Day", point.offset), y: .value("Value", point.element))
+                            .interpolationMethod(.monotone)
+                            .foregroundStyle(Color.tavernAccent)
+                    }
+                    .chartXAxis(.hidden)
+                    .chartYAxis(.hidden)
+                    .frame(height: 22)
+                }
             }
             .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
@@ -574,34 +734,85 @@ struct AgentThreadView: View {
         .inspector(isPresented: $showInspector) {
             if let agent {
                 AgentInspectorView(agent: agent)
+                    .inspectorClose($showInspector)
                     .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
+                    .splitAutosave("inspector")
             }
         }
     }
 }
 
-/// The right panel's button, floating at the page's top right edge, next to the panel it opens.
+/// The right panel's open button, in the window's top right corner while the panel is closed.
+/// (The page's header pill opens it too; the open panel closes with its own X.)
 private struct InspectorToggle: ViewModifier {
     @Binding var isPresented: Bool
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .topTrailing) {
-            Button { isPresented.toggle() } label: {
-                Image(systemName: "sidebar.right").font(.system(size: 14, weight: .medium))
-                    .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
+            if !isPresented {
+                CornerButton(systemImage: "sidebar.right", help: "Show the info panel") { isPresented = true }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(isPresented ? Color.accentColor : Color.secondary)
-            .help(isPresented ? "Hide the info panel" : "Show the info panel")
-            .padding(.top, 8)
-            .padding(.trailing, 10)
         }
+    }
+}
+
+/// The open panel's X, in its top right corner, on the same glass as the sidebar (macOS's
+/// sidebars and inspectors are both glass panes), tinted in a party theme.
+private struct InspectorClose: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content
+        .background {
+            ZStack {
+                PaneGlass()
+                if let palette = Theme.current.palette { palette.sidebar.opacity(0.6) }
+            }
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .topTrailing) {
+            CornerButton(systemImage: "xmark", help: "Hide the info panel") { isPresented = false }
+        }
+    }
+}
+
+/// The sidebar's material, behind the window, for the inspector pane.
+private struct PaneGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
+/// A small icon button on the title bar's line, flush in the top right corner.
+private struct CornerButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage).font(.system(size: 13, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+        .padding(.top, 2)
+        .padding(.trailing, 6)
+        .ignoresSafeArea(edges: .top)
     }
 }
 
 extension View {
     func inspectorToggle(_ isPresented: Binding<Bool>) -> some View { modifier(InspectorToggle(isPresented: isPresented)) }
+    func inspectorClose(_ isPresented: Binding<Bool>) -> some View { modifier(InspectorClose(isPresented: isPresented)) }
 }
 
 extension View {

@@ -17,6 +17,7 @@ struct ServicesView: View {
         HSplitView {
             list
                 .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
+                .splitAutosave("services")
             detail
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -67,7 +68,7 @@ struct ServicesView: View {
                                     .padding(.leading, 4)
                             }
                             ForEach(shown) { container in
-                                ContainerListRow(container: container).tag(key(host, container))
+                                ContainerListRow(container: container).themedTag(key(host, container), selection: selection)
                             }
                         }
                     } header: {
@@ -84,6 +85,7 @@ struct ServicesView: View {
                 }
             }
             .listStyle(.sidebar)
+            .themedList()
         }
     }
 

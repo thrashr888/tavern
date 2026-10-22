@@ -68,8 +68,8 @@ struct LinkChip: View {
                 Text(preview?.displayTitle ?? LinkPreview.domain(of: url))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 220, alignment: .leading)
-                    .fixedSize(horizontal: true, vertical: false)
+                    // One width loading or loaded, so a title arriving never reflows the thread.
+                    .frame(width: 200, alignment: .leading)
                 Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.tertiary)
             }
             .tavernFont(.caption, weight: .medium)
@@ -81,7 +81,7 @@ struct LinkChip: View {
         }
         .buttonStyle(.plain)
         .help(url.absoluteString)
-        .popover(isPresented: $showing, arrowEdge: .bottom) { LinkCard(url: url) }
+        .popover(isPresented: $showing, arrowEdge: .bottom) { LinkCard(url: url).themedSurface() }
         .onAppear { previews.request(url) }
     }
 }
@@ -225,7 +225,7 @@ private struct LinkListRow: View {
         }
         .buttonStyle(.plain)
         .help(url.absoluteString)
-        .popover(isPresented: $showing, arrowEdge: .leading) { LinkCard(url: url) }
+        .popover(isPresented: $showing, arrowEdge: .leading) { LinkCard(url: url).themedSurface() }
         .onAppear { previews.request(url) }
     }
 

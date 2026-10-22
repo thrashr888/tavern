@@ -9,11 +9,14 @@ struct RootView: View {
     @AppStorage(TextScale.storageKey) private var textScale = TextScale.standard
     @State private var selection: Page?
     @State private var searching = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $selection)
+                .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
+                .splitAutosave("sidebar")
         } detail: {
             switch selection ?? .dashboard {
             case .dashboard:
@@ -33,9 +36,23 @@ struct RootView: View {
             }
         }
         .toolbar(.hidden, for: .windowToolbar)
-        .sheet(isPresented: $searching) {
-            SearchPalette(selection: $selection)
-                .environmentObject(model)
+        // ⌘K floats over the window; a click outside it closes it.
+        .overlay {
+            if searching {
+                ZStack {
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { searching = false }
+                    SearchPalette(selection: $selection) { searching = false }
+                        .environmentObject(model)
+                        .themedSurface()
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary))
+                        .shadow(color: .black.opacity(0.3), radius: 24, y: 10)
+                }
+                .transition(.opacity)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tavernOpenSearch)) { _ in searching = true }
         // ⌘K on top: close the sidebar's hover card and hold new ones until it's gone.
@@ -67,6 +84,11 @@ struct RootView: View {
             // TAVERN_PAGE (a page storage key, e.g. "agent:flint") opens a page at launch, for testing.
             let requested = ProcessInfo.processInfo.environment["TAVERN_PAGE"]
             selection = Page.restore(requested ?? (pageKey.isEmpty ? nil : pageKey), roster: model.roster)
+            // TAVERN_SETTINGS=1 opens Settings and TAVERN_SEARCH=1 opens ⌘K, for screenshots.
+            if ProcessInfo.processInfo.environment["TAVERN_SETTINGS"] == "1" { openSettings() }
+            if ProcessInfo.processInfo.environment["TAVERN_SEARCH"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { searching = true }
+            }
         }
         .task { await model.watchTailscale() }
         .task { await model.watchWake() }
@@ -74,6 +96,7 @@ struct RootView: View {
         .task { model.startNotifications() }
         .onChange(of: selection) { _, newValue in
             if let newValue { pageKey = newValue.storageKey }
+            searching = false // a click in the sidebar is a click outside ⌘K too
         }
     }
 }
@@ -85,10 +108,10 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            NavigationLink(value: Page.dashboard) {
+            SidebarLink(selection: selection, value: Page.dashboard) {
                 row { Label("Dashboard", systemImage: "square.grid.2x2") } hint: { ShortcutHint(page: .dashboard) }
             }
-            NavigationLink(value: Page.goals) {
+            SidebarLink(selection: selection, value: Page.goals) {
                 row { Label("Goals", systemImage: "checklist") } hint: { ShortcutHint(page: .goals) }
             }
             Button {
@@ -107,8 +130,9 @@ struct SidebarView: View {
 
             // The whole party: Pi agents live, hosted members by their last mail.
             Section("Party") {
-                ForEach(model.roster.piAgents) { agent in
-                    NavigationLink(value: Page.agent(id: agent.id)) {
+                // The home agent (on this Mac) leads the list.
+                ForEach(homeFirst(model.roster.piAgents)) { agent in
+                    SidebarLink(selection: selection, value: Page.agent(id: agent.id)) {
                         row {
                             if let session = model.session(for: agent.id) {
                                 PiAgentRow(agent: agent, session: session, needs: model.attentionCounts[agent.id] ?? 0)
@@ -120,7 +144,7 @@ struct SidebarView: View {
                     }
                 }
                 ForEach(model.roster.members.filter { $0.kind == .hosted }) { member in
-                    NavigationLink(value: Page.member(id: member.id)) {
+                    SidebarLink(selection: selection, value: Page.member(id: member.id)) {
                         row {
                             HostedMemberRow(member: member, lastSeen: model.lastSeen[member.id], needs: model.attentionCounts[member.id] ?? 0)
                         } hint: { ShortcutHint(page: .member(id: member.id)) }
@@ -130,17 +154,17 @@ struct SidebarView: View {
             }
 
             Section("Machines") {
-                NavigationLink(value: Page.services) {
+                SidebarLink(selection: selection, value: Page.services) {
                     row { Label("Services", systemImage: "shippingbox") } hint: { ShortcutHint(page: .services) }
                 }
             }
 
             Section("Mail") {
-                NavigationLink(value: Page.mail(project: nil)) {
+                SidebarLink(selection: selection, value: Page.mail(project: nil)) {
                     row { Label("All threads", systemImage: "tray") } hint: { ShortcutHint(page: .mail(project: nil)) }
                 }
                 ForEach(model.roster.mailProjects) { project in
-                    NavigationLink(value: Page.mail(project: project.id)) {
+                    SidebarLink(selection: selection, value: Page.mail(project: project.id)) {
                         Label(project.label, systemImage: "number")
                     }
                 }
@@ -163,16 +187,23 @@ struct SidebarView: View {
             }
 
             Section {
-                NavigationLink(value: Page.settings) {
+                SidebarLink(selection: selection, value: Page.settings) {
                     Label("Agent config", systemImage: "gearshape")
                 }
             }
         }
         .listStyle(.sidebar)
+        .background(SidebarHighlight(custom: Theme.current.palette != nil))
         // Breathing room: rows on a 36pt rhythm, and space under the traffic lights.
         .environment(\.defaultMinListRowHeight, 36)
         .safeAreaInset(edge: .top) { Color.clear.frame(height: 6) }
         .animation(.easeOut(duration: 0.12), value: modifiers.held)
+    }
+
+    /// The home agent first, the rest in roster order.
+    private func homeFirst(_ agents: [RosterMember]) -> [RosterMember] {
+        let home = model.roster.homeAgentID
+        return agents.filter { $0.id == home } + agents.filter { $0.id != home }
     }
 
     private func row<Content: View, Hint: View>(@ViewBuilder _ content: () -> Content, @ViewBuilder hint: () -> Hint) -> some View {
@@ -217,6 +248,7 @@ private struct PiAgentRow: View {
 }
 
 private struct AgentRow: View {
+    @EnvironmentObject private var model: AppModel
     let agent: RosterMember
     let status: String
     var needs = 0
@@ -226,7 +258,10 @@ private struct AgentRow: View {
             AvatarView(member: agent, size: 40, hoverCard: false)
                 .overlay(alignment: .topTrailing) { NeedsDot(count: needs).offset(x: 3, y: -2) }
             VStack(alignment: .leading, spacing: 1) {
-                Text(agent.name).fontWeight(.semibold)
+                HStack(spacing: 4) {
+                    Text(agent.name).fontWeight(.semibold)
+                    if model.roster.homeAgentID == agent.id { HomeBadge() }
+                }
                 if let partyClass = agent.partyClass {
                     Text(partyClass).tavernFont(.caption).foregroundStyle(.secondary)
                 }
@@ -300,7 +335,7 @@ private struct MemberHoverCardModifier: ViewModifier {
                 }
             }
             .popover(isPresented: $showing, arrowEdge: .trailing) {
-                MemberHoverCard(member: member)
+                MemberHoverCard(member: member).themedSurface()
             }
     }
 }
@@ -492,5 +527,15 @@ struct NeedsDot: View {
             .overlay(Capsule().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
             .accessibilityLabel(count == 1 ? "Needs you" : "\(count) things need you")
         }
+    }
+}
+
+/// Marks the home agent: the Pi agent on this Mac, which can set Tavern up through its tools.
+struct HomeBadge: View {
+    var body: some View {
+        Image(systemName: "house.fill")
+            .imageScale(.small)
+            .foregroundStyle(Color.tavernAccent)
+            .help("On this Mac: it can set up Tavern with Tavern's own tools, asking you first")
     }
 }

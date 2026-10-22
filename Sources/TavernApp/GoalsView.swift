@@ -49,14 +49,16 @@ struct GoalsView: View {
     var body: some View {
         Group {
             if model.linear == nil {
-                note("No Linear key on this Mac", "Goals reads open PAUL issues with the key at ~/.config/linear-key. Read queries only.")
+                note("No Linear team yet", "Goals reads a Linear team's open issues through Personal Agent Proxy. Add the team key in Settings > Party.")
+            } else if model.mail?.state == .signedOut {
+                ProxySignInPrompt(purpose: "to read your Linear goals")
             } else if let error, issues.isEmpty {
                 note("Couldn't load Linear", error)
             } else if issues.isEmpty && loading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260)
+                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260).splitAutosave("goals")
                     issueList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
                     detail.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -108,16 +110,16 @@ struct GoalsView: View {
 
     private var filterList: some View {
         List(selection: $filter) {
-            row("All open", symbol: "square.stack", count: issues.count).tag(Filter.all)
+            row("All open", symbol: "square.stack", count: issues.count).themedTag(Filter.all, selection: filter)
             Section("Status") {
                 ForEach(Self.statusOrder, id: \.type) { status in
                     let count = issues.filter { $0.stateType == status.type }.count
-                    if count > 0 { row(status.name, symbol: status.symbol, count: count).tag(Filter.status(status.type)) }
+                    if count > 0 { row(status.name, symbol: status.symbol, count: count).themedTag(Filter.status(status.type), selection: filter) }
                 }
             }
             Section("Projects") {
                 ForEach(counts(\.project), id: \.name) { item in
-                    row(item.name, symbol: "folder", count: item.count).tag(Filter.project(item.name))
+                    row(item.name, symbol: "folder", count: item.count).themedTag(Filter.project(item.name), selection: filter)
                 }
             }
             // Agents first (from agent:<id> labels), then people who own issues.
@@ -131,17 +133,18 @@ struct GoalsView: View {
                             CountBadge(count: count)
                         }
                         .padding(.vertical, 2)
-                        .tag(Filter.agent(member.id))
+                        .themedTag(Filter.agent(member.id), selection: filter)
                     }
                 }
             }
             Section("People") {
                 ForEach(counts(\.owner).filter { name in model.roster.members.allSatisfy { !GoalsView.matches($0, owner: name.name) } }, id: \.name) { item in
-                    row(item.name, symbol: "person", count: item.count).tag(Filter.owner(item.name))
+                    row(item.name, symbol: "person", count: item.count).themedTag(Filter.owner(item.name), selection: filter)
                 }
             }
         }
         .listStyle(.sidebar)
+        .themedList()
     }
 
     private func row(_ title: String, symbol: String, count: Int) -> some View {
@@ -206,20 +209,20 @@ struct GoalsView: View {
                 let shown = self.shown
                 if sort != .status {
                     ForEach(sorted(shown)) { issue in
-                        GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier)
+                        GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection)
                     }
                 } else {
                 ForEach(Self.statusOrder, id: \.type) { status in
                     let group = shown.filter { $0.stateType == status.type }
                     if !group.isEmpty {
                         Section(status.name) {
-                            ForEach(group) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier) }
+                            ForEach(group) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection) }
                         }
                     }
                 }
                 let other = shown.filter { issue in !Self.statusOrder.contains { $0.type == issue.stateType } }
                 if !other.isEmpty {
-                    Section("Other") { ForEach(other) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).tag(issue.identifier) } }
+                    Section("Other") { ForEach(other) { issue in GoalRow(issue: issue, agent: model.agent(for: issue), labelled: model.isLabelled(issue)).themedTag(issue.identifier, selection: selection) } }
                 }
                 }
             }
@@ -287,10 +290,10 @@ struct PillButtonStyle: ButtonStyle {
             .padding(.trailing, 12)
             .frame(height: 32)
             .background(
-                selected ? AnyShapeStyle(Color.accentColor.opacity(0.25)) : AnyShapeStyle(.quaternary.opacity(configuration.isPressed ? 0.9 : 0.55)),
+                selected ? AnyShapeStyle(Color.tavernAccent.opacity(0.25)) : AnyShapeStyle(.quaternary.opacity(configuration.isPressed ? 0.9 : 0.55)),
                 in: Capsule()
             )
-            .overlay(Capsule().strokeBorder(selected ? Color.accentColor.opacity(0.6) : Color.clear))
+            .overlay(Capsule().strokeBorder(selected ? Color.tavernAccent.opacity(0.6) : Color.clear))
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(Capsule())
     }
@@ -381,7 +384,9 @@ private struct NewTicketSheet: View {
     @State private var working = false
     @State private var error: String?
 
-    var body: some View {
+    var body: some View { sheet.themedSurface() }
+
+    @ViewBuilder private var sheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New ticket").tavernFont(.title3, weight: .semibold)
             TextField("Title", text: $title).textFieldStyle(.roundedBorder)
@@ -578,7 +583,7 @@ private struct GoalDetail: View {
                             if member.id == owner?.id && !labelled {
                                 Text("Suggested").tavernFont(.caption, weight: .semibold)
                                     .padding(.horizontal, 6).padding(.vertical, 1)
-                                    .background(Color.accentColor.opacity(0.25), in: Capsule())
+                                    .background(Color.tavernAccent.opacity(0.25), in: Capsule())
                             }
                         }
                     }
@@ -774,7 +779,9 @@ private struct SendToAgentSheet: View {
     let send: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    var body: some View { sheet.themedSurface() }
+
+    @ViewBuilder private var sheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 AvatarView(member: agent, size: 36)

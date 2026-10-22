@@ -52,7 +52,9 @@ struct MemberView: View {
             .inspectorToggle($showInspector)
             .inspector(isPresented: $showInspector) {
                 MemberInspector(member: member, selection: $selection)
+                    .inspectorClose($showInspector)
                     .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
+                    .splitAutosave("inspector")
             }
         } else {
             Text("No party member \(memberID)").foregroundStyle(.secondary)
@@ -313,6 +315,9 @@ private struct IMessageConversation: View {
         .padding(.vertical, 5)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.quaternary))
+        .contentShape(Capsule())
+        .onTapGesture { NotificationCenter.default.post(name: .tavernToggleInspector, object: nil) }
+        .help("Show or hide \(member.name)'s panel")
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
     }
@@ -329,7 +334,7 @@ private struct IMessageConversation: View {
                         .textSelection(.enabled)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(message.fromMe ? AnyShapeStyle(Color.accentColor.opacity(0.85)) : AnyShapeStyle(.quaternary.opacity(0.7)),
+                        .background(message.fromMe ? AnyShapeStyle(Color.tavernAccent.opacity(0.85)) : AnyShapeStyle(.quaternary.opacity(0.7)),
                                     in: RoundedRectangle(cornerRadius: 16))
                         .foregroundStyle(message.fromMe ? Color.white : Color.primary)
                 }
@@ -371,14 +376,14 @@ private struct IMessageConversation: View {
                 .padding(12)
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(
-                    dropTargeted ? Color.accentColor : (focused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25)),
+                    dropTargeted ? Color.tavernAccent : (focused ? Color.tavernAccent.opacity(0.5) : Color.secondary.opacity(0.25)),
                     lineWidth: dropTargeted ? 2 : 1))
                 .acceptsImageDrops(into: $images, targeted: $dropTargeted)
                 .onPasteCommand(of: [.image, .fileURL]) { _ in images += DraftImage.fromPasteboard() }
                 Button(action: send) {
                     Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 32, height: 32)
-                        .background(canSend ? Color.accentColor : Color.secondary.opacity(0.4), in: Circle())
+                        .background(canSend ? Color.tavernAccent : Color.secondary.opacity(0.4), in: Circle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: .command)

@@ -21,6 +21,8 @@ struct SettingsView: View {
                 .tabItem { Label("Members", systemImage: "person.3") }
             LoreSettings(roster: roster)
                 .tabItem { Label("Lore", systemImage: "books.vertical") }
+            ProxySettings()
+                .tabItem { Label("Connections", systemImage: "link") }
         }
         .disabled(model.rosterLoadError != nil)
         .frame(width: 760, height: 560)
@@ -42,6 +44,7 @@ private struct PartySettings: View {
 
     var body: some View {
         Form {
+            Section("Appearance") { ThemePicker() }
             Section {
                 TextField("Party name", text: optional(\.partyName), prompt: Text("Party"))
                 TextField("Your name", text: optional(\.ownerName), prompt: Text("me"))
@@ -164,11 +167,12 @@ private struct MembersSettings: View {
                                 Spacer()
                                 Text(member.kind == .pi ? "Pi" : (member.platform ?? "Hosted")).tavernFont(.caption).foregroundStyle(.secondary)
                             }
-                            .tag(member.id)
+                            .themedTag(member.id, selection: selection)
                         }
                         .onMove { roster.members.move(fromOffsets: $0, toOffset: $1) }
                     }
                 }
+                .themedList()
                 Divider()
                 HStack(spacing: 4) {
                     Menu {

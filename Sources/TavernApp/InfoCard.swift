@@ -54,7 +54,7 @@ struct InfoRow: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Color.tavernAccent)
                 .help("Copy \(label)")
             } else {
                 Color.clear.frame(width: 1, height: 1)

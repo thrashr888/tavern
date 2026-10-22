@@ -21,7 +21,7 @@ struct ReactionChips: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(.quaternary.opacity(0.6), in: Capsule())
-                    .overlay(Capsule().strokeBorder(mine ? Color.accentColor : .clear, lineWidth: 1))
+                    .overlay(Capsule().strokeBorder(mine ? Color.tavernAccent : .clear, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(onTap == nil)
@@ -63,6 +63,7 @@ struct EmojiDraftButton: View {
                 }
             }
             .padding(10)
+            .themedSurface()
         }
     }
 }
@@ -90,6 +91,7 @@ struct AddReactionButton: View {
                 }
             }
             .padding(10)
+            .themedSurface()
         }
     }
 }

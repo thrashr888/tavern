@@ -84,7 +84,11 @@
    ],
    "toolCallId": "c2",
    "toolName": "edit",
-   "isError": false
+   "isError": false,
+   "details": {
+    "diff": " 7   monthly: 10,\n-8   annual: 96,\n+8   annual: 120,\n 9 };",
+    "firstChangedLine": 8
+   }
   }
  },
  {

@@ -195,12 +195,9 @@ final class ProjectOwnerTests: XCTestCase {
 }
 
 final class MailBodyTests: XCTestCase {
-    func testHTMLOnlyMailBecomesText() {
-        let html = "<html><head><style>p{}</style></head><body><p>Rook,</p><p>Retro below.<br>Wins: shipped.</p><p>Wololo</p><blockquote>On Fri, Sam wrote: old</blockquote></body></html>"
-        let text = GmailMessage.textFromHTML(html)
-        XCTAssertTrue(text.hasPrefix("Rook,"))
-        XCTAssertTrue(text.contains("Wins: shipped."))
-        XCTAssertEqual(MailItem.detectAuthor(from: "sam@example.com", body: MailItem.stripQuotedReply(text), roster: .fixture), "wololo")
+    func testSignOffAboveAQuotedReply() {
+        let body = MailItem.stripQuotedReply("Rook,\n\nRetro below.\nWins: shipped.\n\nWololo\n> On Fri, Sam wrote: old")
+        XCTAssertEqual(MailItem.detectAuthor(from: "sam@example.com", body: body, roster: .fixture), "wololo")
     }
 
     func testSignOffLineStartingWithName() {
@@ -234,17 +231,6 @@ final class TrustedSenderTests: XCTestCase {
         XCTAssertFalse(roster.isTrustedSender("<mallory@evil.example> <sam@example.com>"), "two mailboxes")
         XCTAssertFalse(roster.isTrustedSender("sam@example.com, mallory@evil.example"))
         XCTAssertTrue(roster.isTrustedSender("\"Sam <x@y.z>\" <sam@example.com>"), "a quoted display name is skipped")
-    }
-
-    func testAuthenticationResultsDomains() {
-        let results = "mx.google.com; dkim=pass header.i=@mail.instinct.example header.s=s1; spf=pass smtp.mailfrom=x@y.z; dmarc=pass (p=NONE) header.from=mail.instinct.example"
-        XCTAssertEqual(Set(GmailMessage.verifiedDomains(in: results)), ["mail.instinct.example"])
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; dkim=fail header.d=evil.example; dmarc=fail header.from=evil.example"), [])
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; dkim=pass header.d=evil.example"), [], "DKIM alone doesn't count")
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "evil.example; dmarc=pass header.from=sam.example"), [], "not Gmail's header")
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; spf=fail (dmarc=pass header.from=sam.example) smtp.mailfrom=evil.example"), [], "comment")
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; dmarc=fail reason=\"; dmarc=pass header.from=sam.example\""), [], "quoted string")
-        XCTAssertEqual(GmailMessage.verifiedDomains(in: "mx.google.com; spf=fail x=dmarc=pass header.from=sam.example"), [], "result must lead the clause")
     }
 }
 

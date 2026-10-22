@@ -67,22 +67,24 @@ install leaves an agent card in `~/.config/pi-bundle/agents/`; Tavern reads the 
 and over your own SSH on the online Macs and Linux boxes of your tailnet, then offers "Found Ember
 on M3. Add?" on the Dashboard and in Settings. Without Tailscale it looks on this Mac only.
 
+Mail and Linear come through [Personal Agent Proxy](https://app.personalagentproxy.com): sign in
+once from the Dashboard or Settings > Connections, choose "Custom MCP agent" named Tavern the first
+time, then give Tavern your Gmail (read, and archive if you like) and Linear (read, create and edit
+issues) in PAP. Tavern keeps the sign-in in your keychain. Through PAP, only mail sent from your own
+account can wake an agent (PAP doesn't pass Gmail's sender checks), and an `agent:<id>` label must
+already exist in Linear before Tavern can put it on an issue.
+
 - `roster.json`: what Settings saves. Keys it doesn't know are kept, and the first save leaves the
   old file as `roster.json.before-settings`. A few fields are still file-only (owner maps, trusted
   senders, sign-offs); see [docs/roster.example.json](docs/roster.example.json). Without the file
   Tavern shows a two-member example party.
 - `portrait.png` and `avatars/<id>.png`: party art, set in Settings. Members without art get an initial.
-- `gmail-oauth-client.json`: a desktop OAuth client from your own Google Cloud project, for the
-  mail feed (scope `gmail.modify`: Tavern reads, and archives a thread when you ask; it never
-  sends or deletes). Tavern stores the token in your keychain.
-- `~/.config/linear-key`: a Linear API key, for Goals. Tavern sends read queries, plus agent
-  labels, new issues and edits to an issue's title, description, status, priority and project.
 - iMessage uses [cider](https://github.com/thrashr888/cider) and needs Full Disk Access for
   Tavern to read your Messages history.
 
 ## Layout
 
-- `Sources/TavernCore`: models, SQLite event store, roster, Pi RPC, Gmail, Linear, Docker. No UI.
+- `Sources/TavernCore`: models, SQLite event store, roster, Pi RPC, mail and Linear through Personal Agent Proxy, Docker. No UI.
 - `Sources/TavernApp`: the SwiftUI app.
 - `Tests/TavernCoreTests`: unit tests for the core.
 - `bridge/tavern-durable`: the Node host that keeps one Pi Durable session per agent.

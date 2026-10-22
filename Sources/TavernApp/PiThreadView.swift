@@ -12,6 +12,9 @@ struct PiThreadView: View {
     @State private var finding = false
     @State private var findQuery = ""
     @State private var findIndex = 0
+    /// How many of the newest rows the thread shows; reaching the top loads another page.
+    @State private var shownRows = PiThreadView.rowPage
+    static let rowPage = 150
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,11 +23,6 @@ struct PiThreadView: View {
                 FindBar(query: $findQuery, current: $findIndex, matchCount: findMatchIDs.count) {
                     finding = false
                     findQuery = ""
-                }
-            }
-            if let dialog = session.dialog {
-                DialogBanner(dialog: dialog) { answer in
-                    Task { await session.answer(answer) }
                 }
             }
             transcript
@@ -75,6 +73,10 @@ struct PiThreadView: View {
             .padding(.vertical, 5)
             .background(.regularMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(.quaternary))
+            // Like Muse: the pill opens (and closes) the agent's panel.
+            .contentShape(Capsule())
+            .onTapGesture { NotificationCenter.default.post(name: .tavernToggleInspector, object: nil) }
+            .help("Show or hide \(agent?.name ?? "the agent")'s panel")
             Spacer()
         }
         .padding(.vertical, 8)
@@ -108,7 +110,22 @@ struct PiThreadView: View {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     let matches = findMatchIDs
                     let currentMatch = matches.indices.contains(findIndex) ? matches[findIndex] : nil
-                    ForEach(session.rows) { row in
+                    let groups = HeartbeatRun.grouped(session.rows)
+                    // The newest rows only; older ones load as you reach the top. Find shows all.
+                    let visible = finding ? groups[...] : groups.suffix(shownRows)
+                    if visible.count < groups.count {
+                        ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            .onAppear {
+                                let anchor = visible.first?.id
+                                shownRows += Self.rowPage
+                                // Stay on the row that was at the top, rather than jumping.
+                                if let anchor { DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: .top) } }
+                            }
+                    }
+                    ForEach(visible) { group in
+                        switch group {
+                        case .heartbeats(let runs): HeartbeatGroupRow(runs: runs, session: session)
+                        case .row(let row):
                         switch row {
                         case .message(let item):
                             TranscriptRow(item: item, reactions: session.reactions[item.id] ?? []) { emoji in
@@ -118,6 +135,7 @@ struct PiThreadView: View {
                         case .work(let work): WorkRow(work: work)
                         case .card(_, let card): ToolCardView(card: card, session: session)
                         case .background(let run): HeartbeatRow(run: run, session: session)
+                        }
                         }
                     }
                     ForEach(session.pendingMessages) { item in
@@ -167,6 +185,13 @@ struct PiThreadView: View {
     /// A rounded card: the message field on top, chips and actions underneath.
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // What the agent is waiting on sits where you answer, just above the composer.
+            if let dialog = session.dialog {
+                DialogBanner(dialog: dialog) { answer in
+                    Task { await session.answer(answer) }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let error = session.lastError {
                 Label(ModelError.parse(error).summary, systemImage: "exclamationmark.triangle")
                     .tavernFont(.caption).foregroundStyle(.orange).lineLimit(2)
@@ -199,7 +224,7 @@ struct PiThreadView: View {
                         RoundButton(systemImage: "stop.fill", tint: .red) { Task { await session.abort() } }
                             .help("Abort the turn")
                     } else {
-                        RoundButton(systemImage: "arrow.up", tint: .accentColor, action: submitDefault)
+                        RoundButton(systemImage: "arrow.up", tint: .tavernAccent, action: submitDefault)
                             .keyboardShortcut(.return, modifiers: .command)
                             .disabled(draftIsEmpty)
                             .help("Send (Return)")
@@ -209,7 +234,7 @@ struct PiThreadView: View {
             .padding(12)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(
-                dropTargeted ? Color.accentColor : (composerFocused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25)),
+                dropTargeted ? Color.tavernAccent : (composerFocused ? Color.tavernAccent.opacity(0.5) : Color.secondary.opacity(0.25)),
                 lineWidth: dropTargeted ? 2 : 1))
             .acceptsImageDrops(into: $images, targeted: $dropTargeted)
             .onPasteCommand(of: [.image, .fileURL]) { _ in images += DraftImage.fromPasteboard() }
@@ -389,7 +414,7 @@ extension TranscriptRow {
             .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
+            .background(Color.tavernAccent.opacity(0.18), in: RoundedRectangle(cornerRadius: 14))
     }
 
     /// Inline Markdown (bold, italics, code, links) with line breaks kept; plain text if it won't parse.
@@ -587,8 +612,68 @@ struct StepList: View {
                 }
                 .tavernFont(.callout)
                 .padding(.vertical, 5)
+                if let change = step.change { ChangeView(change: change).padding(.leading, 32).padding(.bottom, 4) }
             }
         }
+    }
+}
+
+/// An edit's diff or a write's new file, collapsed to "+12 −3" until opened.
+struct ChangeView: View {
+    let change: StepChange
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").imageScale(.small)
+                    if change.isNewContent { Text("New file · \(change.added) lines") }
+                    else {
+                        Text("+\(change.added)").foregroundStyle(.green)
+                        Text("−\(change.removed)").foregroundStyle(.red)
+                    }
+                }
+                .tavernFont(.caption, weight: .medium)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(change.lines.enumerated()), id: \.offset) { _, line in
+                            HStack(spacing: 8) {
+                                Text(line.number).foregroundStyle(.tertiary).frame(minWidth: 28, alignment: .trailing)
+                                Text(symbol(line.mark)).foregroundStyle(color(line.mark))
+                                Text(line.text.isEmpty ? " " : line.text).foregroundStyle(line.mark == .gap ? .secondary : .primary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(color(line.mark).opacity(line.mark == .added || line.mark == .removed ? 0.12 : 0))
+                        }
+                        if change.omitted > 0 {
+                            Text("\(change.omitted) more lines").foregroundStyle(.secondary).padding(8)
+                        }
+                    }
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(.vertical, 6)
+                }
+                .frame(maxHeight: 320)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
+            }
+        }
+    }
+
+    private func symbol(_ mark: StepChange.Line.Mark) -> String {
+        switch mark { case .added: "+"; case .removed: "−"; case .context, .gap: " " }
+    }
+
+    private func color(_ mark: StepChange.Line.Mark) -> Color {
+        switch mark { case .added: .green; case .removed: .red; case .context, .gap: .secondary }
     }
 }
 
@@ -676,19 +761,28 @@ private struct ThinkingView: View {
     }
 }
 
-/// The loud "waiting on you" state for extension dialogs that pause the agent.
+/// The loud "waiting on you" state for extension dialogs that pause the agent, shown above the
+/// composer: what it wants, the command in full, and the answers.
 struct DialogBanner: View {
     let dialog: PiDialog
     let onAnswer: (PiDialogAnswer) -> Void
     @State private var text = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Waiting on you: \(dialog.title)", systemImage: "hand.raised.fill")
-                .tavernFont(.headline)
-            if let message = dialog.message {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(dialog.title, systemImage: "hand.raised.fill")
+                .tavernFont(.callout, weight: .semibold)
+                .foregroundStyle(.orange)
+            if let message = dialog.message, !message.isEmpty {
                 if dialog.isApproval {
-                    Text(message).font(.system(.callout, design: .monospaced)).textSelection(.enabled).lineLimit(12)
+                    ScrollView {
+                        Text(message).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
                 } else {
                     Text(message)
                 }
@@ -697,17 +791,19 @@ struct DialogBanner: View {
             case .confirm where dialog.isApproval:
                 // No default key: Return shouldn't run a risky command.
                 HStack {
-                    Button("Allow") { onAnswer(.confirmed(true)) }
-                    Button("Deny") { onAnswer(.confirmed(false)) }
+                    Spacer()
+                    Button("Deny") { onAnswer(.confirmed(false)) }.controlSize(.large)
+                    Button("Allow") { onAnswer(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
                 }
             case .confirm:
                 HStack {
-                    Button("Yes") { onAnswer(.confirmed(true)) }.keyboardShortcut(.defaultAction)
-                    Button("No") { onAnswer(.confirmed(false)) }
+                    Spacer()
                     Button("Cancel") { onAnswer(.cancelled) }
+                    Button("No") { onAnswer(.confirmed(false)) }
+                    Button("Yes") { onAnswer(.confirmed(true)) }.keyboardShortcut(.defaultAction)
                 }
             case .select:
-                HStack {
+                FlowLayout(spacing: 8) {
                     ForEach(dialog.options, id: \.self) { option in
                         Button(option) { onAnswer(.value(option)) }
                     }
@@ -719,13 +815,15 @@ struct DialogBanner: View {
                     .lineLimit(dialog.method == .editor ? 3...10 : 1...3)
                     .onAppear { text = dialog.prefill ?? "" }
                 HStack {
-                    Button("Submit") { onAnswer(.value(text)) }.keyboardShortcut(.defaultAction)
+                    Spacer()
                     Button("Cancel") { onAnswer(.cancelled) }
+                    Button("Submit") { onAnswer(.value(text)) }.keyboardShortcut(.defaultAction)
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.15))
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.orange.opacity(0.45)))
     }
 }

@@ -168,6 +168,7 @@ private struct NonModalPopover<Content: View>: NSViewRepresentable {
         func show(_ content: Content, beside anchor: NSView, in window: NSWindow) {
             let root = AnyView(
                 content
+                    .themedSurface()
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -384,7 +385,7 @@ private struct ReplyBox: View {
                     .onSubmit(submit)
                 Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(canSend ? Color.tavernAccent : Color.secondary)
                     .disabled(!canSend)
                     .help("Send")
             }

@@ -20,11 +20,14 @@ struct SearchPalette: View {
         var page: Page?
         var mailThread: String?
         var external: URL?
+        var theme: Theme?
     }
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: Page?
+    /// Closes the palette when it's shown as an overlay rather than a sheet.
+    var onClose: (() -> Void)? = nil
     @State private var query = ""
     @State private var scope: Scope = .all
     @State private var local: [Result] = []
@@ -51,7 +54,7 @@ struct SearchPalette: View {
                         .buttonStyle(.plain)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(scope == option ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12),
+                        .background(scope == option ? Color.tavernAccent.opacity(0.25) : Color.secondary.opacity(0.12),
                                     in: Capsule())
                 }
                 Spacer()
@@ -65,7 +68,7 @@ struct SearchPalette: View {
             List(selection: $highlighted) {
                 ForEach(results) { result in
                     ResultRow(result: result)
-                        .tag(result.id)
+                        .themedTag(result.id, selection: highlighted)
                         .onTapGesture(count: 2) { open(result, external: false) }
                 }
                 if let linearError, scope == .all || scope == .linear {
@@ -76,6 +79,7 @@ struct SearchPalette: View {
                 }
             }
             .listStyle(.plain)
+            .themedList()
 
             Divider()
             HStack {
@@ -94,7 +98,7 @@ struct SearchPalette: View {
                 .opacity(0)
             Button("") { move(1) }.keyboardShortcut(.downArrow, modifiers: []).opacity(0)
             Button("") { move(-1) }.keyboardShortcut(.upArrow, modifiers: []).opacity(0)
-            Button("") { dismiss() }.keyboardShortcut(.cancelAction).opacity(0)
+            Button("") { close() }.keyboardShortcut(.cancelAction).opacity(0)
         }
         .onAppear { focused = true }
         .task(id: query) { await runSearch() }
@@ -124,14 +128,14 @@ struct SearchPalette: View {
             linearError = nil
             return
         }
-        local = agentResults(text) + storeResults(text)
+        local = themeResults(text) + agentResults(text) + storeResults(text)
         highlighted = results.first?.id
         // Debounce the network part.
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
         guard let source = model.linear else {
             linear = []
-            linearError = "Linear: no key at ~/.config/linear-key"
+            linearError = "Linear: no team key in Settings"
             return
         }
         do {
@@ -145,6 +149,15 @@ struct SearchPalette: View {
             linearError = "Linear: \(error)"
         }
         if highlighted == nil { highlighted = results.first?.id }
+    }
+
+    /// "sepia", "dark", "theme"…: switch the theme from here.
+    private func themeResults(_ text: String) -> [Result] {
+        let needle = text.lowercased().trimmingCharacters(in: .whitespaces)
+        guard needle.count >= 3 else { return [] }
+        return Theme.allCases.filter { "theme \($0.label.lowercased())".contains(needle) || $0.label.lowercased().hasPrefix(needle) }
+            .map { Result(id: "theme:\($0.rawValue)", scope: .all, icon: $0.symbol, title: "\($0.label) theme",
+                          detail: $0 == Theme.current ? "Current theme" : "Switch Tavern's look", theme: $0) }
     }
 
     private func agentResults(_ text: String) -> [Result] {
@@ -198,7 +211,9 @@ struct SearchPalette: View {
 
     private func open(_ result: Result?, external: Bool) {
         guard let result else { return }
-        if external, let url = result.external {
+        if let theme = result.theme {
+            UserDefaults.standard.set(theme.rawValue, forKey: Theme.storageKey)
+        } else if external, let url = result.external {
             NSWorkspace.shared.open(url)
         } else if let page = result.page {
             model.focusedMailThread = result.mailThread
@@ -206,7 +221,11 @@ struct SearchPalette: View {
         } else if let url = result.external {
             NSWorkspace.shared.open(url)
         }
-        dismiss()
+        close()
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 }
 

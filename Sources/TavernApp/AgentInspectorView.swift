@@ -26,6 +26,12 @@ struct AgentInspectorView: View {
                     if !subtitle.isEmpty {
                         Text(subtitle).foregroundStyle(.secondary)
                     }
+                    if model.roster.homeAgentID == agent.id {
+                        Label("Home · this Mac", systemImage: "house.fill")
+                            .tavernFont(.caption, weight: .medium)
+                            .foregroundStyle(Color.tavernAccent)
+                            .help("This agent can set up Tavern with Tavern's own tools; each change asks you first.")
+                    }
                     if let session = model.session(for: agent.id) {
                         StatusLine(session: session)
                     }

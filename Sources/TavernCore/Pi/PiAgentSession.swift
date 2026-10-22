@@ -36,7 +36,12 @@ public final class PiAgentSession: ObservableObject {
     private var listener: Task<Void, Never>?
 
     @Published public private(set) var presence: Presence = .disconnected
-    @Published public private(set) var transcript: [TranscriptItem] = []
+    @Published public private(set) var transcript: [TranscriptItem] = [] {
+        // Built once per change, not on every render (a streaming word re-renders the thread).
+        didSet { rows = PiActivity.rows(from: transcript) }
+    }
+    /// The transcript as thread rows: messages, folded work and heartbeats, cards.
+    public private(set) var rows: [PiThreadRow] = []
     /// Assistant text streaming in for the current turn; cleared when the turn settles.
     @Published public private(set) var streamingText = ""
     /// Thinking streaming in for the current turn, so a long think doesn't look idle.
@@ -85,7 +90,6 @@ public final class PiAgentSession: ObservableObject {
     public var isWorking: Bool { presence == .working }
 
     /// The transcript with tool runs folded into "Worked · N steps" rows.
-    public var rows: [PiThreadRow] { PiActivity.rows(from: transcript) }
 
     /// The turn in progress as a work row, while it has run any tools.
     public var liveWork: PiWork? {
@@ -105,6 +109,7 @@ public final class PiAgentSession: ObservableObject {
     @Published public private(set) var lastConnectError: String?
 
     private var wantsConnection = false
+    private var connecting = false
     private var attempts = 0
     private var reconnectTask: Task<Void, Never>?
     /// Where the running live thought starts in `streamingThinking`.
@@ -114,7 +119,11 @@ public final class PiAgentSession: ObservableObject {
         wantsConnection = true
         reconnectTask?.cancel()
         reconnectTask = nil
-        guard client == nil else { return }
+        // A page and the app can both ask at once; a second connection would replace the first
+        // one's listener and drop what the host sent it on connect (a waiting approval).
+        guard client == nil, !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         if presence == .disconnected { presence = .connecting }
         do {
             let client = PiClient(transport: try makeTransport())

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import TavernCore
 import WebKit
@@ -12,7 +13,14 @@ struct ToolCardView: View {
     @ObservedObject var session: PiAgentSession
     @State private var page: ToolCardPage?
     @State private var failure: String?
-    @State private var height: CGFloat = 120
+    @State private var height: CGFloat
+
+    init(card: ToolCard, session: PiAgentSession) {
+        self.card = card
+        self.session = session
+        // The size it last drew at, so scrolling back to it doesn't jump from a placeholder.
+        _height = State(initialValue: CardHeights.height(for: card) ?? 120)
+    }
 
     var body: some View {
         Group {
@@ -70,22 +78,37 @@ private struct CardWebView: NSViewRepresentable {
             window.parent = { postMessage: (message) => window.webkit.messageHandlers.mcp.postMessage(JSON.stringify(message)) };
             window.addEventListener("error", (e) => window.webkit.messageHandlers.mcp.postMessage(JSON.stringify({ method: "tavern/log", params: { message: String(e.message) + " @" + e.lineno } })));
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if let tint = Self.tintScript() {
+            controller.addUserScript(WKUserScript(source: tint, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
         controller.add(context.coordinator, name: "mcp")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = view
-        context.coordinator.theme = Self.theme(colorScheme, view)
-        view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
+        context.coordinator.theme = Self.theme(colorScheme, view, page: page)
+        // The content policy is spliced into the card's own HTML, so WebKit also blocks every load
+        // but data: and the card's declared image hosts, whatever the page's markup does.
+        let page = page
+        Task { @MainActor in
+            // Fail closed: no rules, no page.
+            guard let rules = await CardNetworkRules.list(imageDomains: page.imageDomains) else {
+                view.loadHTMLString("<p style='font:12px -apple-system;color:gray'>This card couldn't be shown safely.</p>", baseURL: nil)
+                return
+            }
+            controller.add(rules)
+            view.loadHTMLString(Self.withPolicy(page), baseURL: nil)
+        }
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
-        context.coordinator.setTheme(Self.theme(colorScheme, view))
+        context.coordinator.setTheme(Self.theme(colorScheme, view, page: page))
     }
 
-    /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's.
-    static func theme(_ scheme: ColorScheme, _ view: NSView) -> String {
+    /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's. Cards
+    /// only know light and dark; Parchment and Hearth tint them on Tavern's side.
+    static func theme(_ scheme: ColorScheme, _ view: NSView, page: ToolCardPage) -> String {
         let appearance = view.window?.effectiveAppearance ?? NSApp.effectiveAppearance
         return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
     }
@@ -94,10 +117,23 @@ private struct CardWebView: NSViewRepresentable {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "mcp")
     }
 
+    /// A party theme's tint, laid over the card by Tavern so any card follows the theme without
+    /// knowing about it: hues warmed toward sepia, then the page color multiplied in (Parchment:
+    /// white turns to parchment, ink stays ink) or screened in (Hearth: black turns to umber,
+    /// light text stays light).
+    static func tintScript() -> String? {
+        let theme = Theme.current
+        guard theme.palette != nil else { return nil }
+        let blend = theme == .parchment ? "multiply" : "screen"
+        let base = theme == .parchment ? "#f3e8cf" : "#2a1e16"
+        let css = "html{filter:sepia(.35) saturate(1.05)}html::after{content:'';position:fixed;inset:0;pointer-events:none;background:\(base);mix-blend-mode:\(blend);z-index:2147483647}"
+        return "(()=>{const s=document.createElement('style');s.textContent=\"\(css)\";(document.head||document.documentElement).appendChild(s);})();"
+    }
+
     /// The page with Tavern's content policy first in `<head>`. Policies only add up, so a policy
     /// the page carries can tighten this one but never loosen it.
     static func withPolicy(_ page: ToolCardPage) -> String {
-        let images = (["data:"] + page.imageDomains).joined(separator: " ")
+        let images = (["data:"] + CardNetworkRules.hosts(page.imageDomains).map { "https://\($0)" }).joined(separator: " ")
         let policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src \(images); font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
         let meta = "<meta http-equiv=\"Content-Security-Policy\" content=\"\(policy)\">"
         if let head = page.html.range(of: "<head>", options: .caseInsensitive) {
@@ -170,7 +206,11 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             notify("ui/notifications/tool-input", ["arguments": card.arguments])
             notify("ui/notifications/tool-result", ["content": .array([]), "structuredContent": card.structuredContent])
         case "ui/notifications/size-changed":
-            if let h = params["height"]?.doubleValue { height.wrappedValue = min(max(CGFloat(h), 40), 640) }
+            if let h = params["height"]?.doubleValue {
+                let value = min(max(CGFloat(h), 40), 640)
+                height.wrappedValue = value
+                CardHeights.remember(value, for: card)
+            }
         case "ui/open-link":
             if let raw = params["url"]?.stringValue, let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                 NSWorkspace.shared.open(url)
@@ -225,5 +265,78 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private func post(_ message: [String: JSONValue]) {
         guard let data = try? JSONValue.object(message).encoded(), let json = String(data: data, encoding: .utf8) else { return }
         webView?.evaluateJavaScript("window.dispatchEvent(new MessageEvent('message', { data: \(json) }))")
+    }
+}
+
+/// Each card's last drawn height, kept across launches (the newest 500), so a card shows at its
+/// real size right away instead of growing from a placeholder and pushing the thread around.
+@MainActor
+enum CardHeights {
+    private static let key = "tavern.cardHeights"
+    private static var heights: [String: Double] = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+    private static var order: [String] = UserDefaults.standard.stringArray(forKey: key + ".order") ?? []
+
+    static func id(_ card: ToolCard) -> String {
+        // A stable digest (String.hashValue changes every launch).
+        let content = (try? card.structuredContent.encoded()) ?? Data()
+        let digest = SHA256.hash(data: content).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "\(card.server)|\(card.resourceUri)|\(digest)"
+    }
+
+    static func height(for card: ToolCard) -> CGFloat? { heights[id(card)].map { CGFloat($0) } }
+
+    static func remember(_ height: CGFloat, for card: ToolCard) {
+        let id = id(card)
+        guard heights[id] != Double(height) else { return }
+        heights[id] = Double(height)
+        order.removeAll { $0 == id }
+        order.append(id)
+        if order.count > 500 {
+            for old in order.prefix(order.count - 500) { heights.removeValue(forKey: old) }
+            order.removeFirst(order.count - 500)
+        }
+        UserDefaults.standard.set(heights, forKey: key)
+        UserDefaults.standard.set(order, forKey: key + ".order")
+    }
+}
+
+/// WebKit content rules for cards: block every load except data: URLs, the page itself
+/// (about:blank) and https images from the hosts a card declares. Compiled once per host set.
+@MainActor
+enum CardNetworkRules {
+    private static var cache: [String: WKContentRuleList] = [:]
+
+    /// A card's declared image hosts that are plain hostnames ("avatars.example.com", or an
+    /// https origin of one); anything else ("*", "https:", quotes, paths) is dropped.
+    static func hosts(_ imageDomains: [String]) -> [String] {
+        imageDomains.compactMap { value in
+            let host = value.hasPrefix("https://") ? URL(string: value)?.host : value
+            guard let host = host?.lowercased(), host.contains("."),
+                  host.range(of: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", options: .regularExpression) != nil
+            else { return nil }
+            return host
+        }.sorted()
+    }
+
+    static func list(imageDomains: [String]) async -> WKContentRuleList? {
+        let hosts = hosts(imageDomains)
+        let key = hosts.joined(separator: ",")
+        if let cached = cache[key] { return cached }
+        var rules: [[String: Any]] = [
+            ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
+            ["trigger": ["url-filter": "^data:"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^about:"], "action": ["type": "ignore-previous-rules"]],
+        ]
+        for host in hosts {
+            let escaped = host.replacingOccurrences(of: ".", with: "\\.")
+            rules.append(["trigger": ["url-filter": "^https://\(escaped)/", "resource-type": ["image"]], "action": ["type": "ignore-previous-rules"]])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules), let json = String(data: data, encoding: .utf8) else { return nil }
+        let identifier = "tavern.cards." + (key.isEmpty ? "none" : key)
+        guard let list = try? await WKContentRuleListStore.default().compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) else {
+            return nil
+        }
+        cache[key] = list
+        return list
     }
 }
