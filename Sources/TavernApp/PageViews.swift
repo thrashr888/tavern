@@ -736,6 +736,7 @@ struct AgentThreadView: View {
                 AgentInspectorView(agent: agent)
                     .inspectorClose($showInspector)
                     .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
+                    .splitAutosave("inspector")
             }
         }
     }

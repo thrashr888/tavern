@@ -16,6 +16,7 @@ struct RootView: View {
             SidebarView(selection: $selection)
                 .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
+                .splitAutosave("sidebar")
         } detail: {
             switch selection ?? .dashboard {
             case .dashboard:

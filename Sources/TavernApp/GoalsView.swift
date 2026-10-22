@@ -58,7 +58,7 @@ struct GoalsView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260)
+                    filters.frame(minWidth: 190, idealWidth: 210, maxWidth: 260).splitAutosave("goals")
                     issueList.frame(minWidth: 300, idealWidth: 380, maxWidth: 520)
                     detail.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
                 }
