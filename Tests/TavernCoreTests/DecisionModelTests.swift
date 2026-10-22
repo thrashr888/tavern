@@ -21,6 +21,19 @@ final class DecisionModelTests: XCTestCase {
         XCTAssertNil(DecisionSuggestions.pick("project", in: answers, minConfidence: 0.9))
     }
 
+    /// Clef Flash's real reply through Ollama 0.40.7 on the M5 (2026-10-22), with its own
+    /// confidence field beside ours.
+    func testParsesClefFlashsReply() throws {
+        let reply = #"{"model":"clef-flash:latest","answers":{"project":{"type":"choice","choice":"tavern","probabilities":{"tavern":0.8536691640672595,"alchemy":0.10037555715895659,"none":0.04595527877378392},"confidence":0.5381868850365039}},"usage":{"input_tokens":160,"output_tokens":0},"prompt_eval_cached_count":0}"#
+        let asked: [String: DecisionQuestion] = ["project": .choice(instructions: "Which project?", options: [
+            (key: "tavern", description: "Tavern Mac app"), (key: "alchemy", description: "Alchemy notebook app"), (key: "none", description: "Unclear"),
+        ])]
+        let answers = try DecisionBackend.parse(JSONValue.decode(Data(reply.utf8)), questions: asked)
+        XCTAssertEqual(answers["project"]?.choice, "tavern")
+        XCTAssertEqual(answers["project"]?.confidence ?? 0, 0.7533, accuracy: 0.001)
+        XCTAssertEqual(DecisionSuggestions.pick("project", in: answers), "tavern")
+    }
+
     func testRejectsAnswersThatDontMatchTheQuestion() {
         let unknown: JSONValue = ["answers": [
             "project": ["type": "choice", "choice": "p9", "probabilities": ["p9": .number(1)]],
