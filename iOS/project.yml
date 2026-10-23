@@ -46,3 +46,4 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Tavern turns your dictation into text, on the iPhone when it can.
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 5T4QSYSNP2
