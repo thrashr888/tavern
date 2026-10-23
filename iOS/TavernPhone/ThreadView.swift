@@ -447,6 +447,9 @@ private struct ApprovalCard: View {
                     Spacer()
                     Button("Allow") { reply(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(Color.tavernAccent)
                 }
+                if let always = dialog.alwaysLabel {
+                    Button(always) { reply(.alwaysAllow) }.font(.footnote).frame(maxWidth: .infinity, alignment: .trailing)
+                }
             case .select:
                 ForEach(dialog.options, id: \.self) { option in
                     Button(option) { reply(.value(option)) }.buttonStyle(.bordered)
