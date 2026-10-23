@@ -70,7 +70,8 @@ const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_
 const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
 const selfTools = selfExtension({ approvals, cwd: AGENT_CWD, name: process.env.AGENT_NAME, info: selfInfo, setMinutes: setHeartbeatMinutes });
 // What Paul said to always allow, per agent (always-allow.json in its folder).
-const always = new AlwaysAllow(AGENT_CWD);
+const always = new AlwaysAllow(process.env.TAVERN_DURABLE_STATE ??
+  path.join(os.homedir(), ".local/state/tavern-durable", `${path.basename(AGENT_CWD)}-${crypto.createHash("sha256").update(AGENT_CWD).digest("hex").slice(0, 8)}`));
 const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify, always }), askExtension(approvals), selfTools, mcp];
 // Pi packages installed for this agent, such as its memory. TAVERN_DURABLE_PI_LOADER swaps in a
 // fake loader for tests. The bridge's callbacks reach the controller once the session is open.

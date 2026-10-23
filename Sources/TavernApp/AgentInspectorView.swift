@@ -326,9 +326,9 @@ private struct AlwaysAllowSection: View {
         }
     }
 
-    /// "npm commands" for "bash:npm", else the tool's name.
+    /// The command for "bash:npm test", else the tool's name.
     static func label(_ key: String) -> String {
-        key.hasPrefix("bash:") ? "\(key.dropFirst(5)) commands" : key
+        key.hasPrefix("bash:") ? "`\(key.dropFirst(5))`" : key
     }
 }
 

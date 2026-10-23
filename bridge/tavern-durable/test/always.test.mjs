@@ -8,22 +8,28 @@ import { approvalExtension, riskOf } from "../approvals.mjs";
 
 const bash = (command) => ({ name: "bash", arguments: { command } });
 
-test("a simple command is remembered by its program; chains and pipes never are", () => {
-  assert.equal(alwaysKey(bash("npm test")), "bash:npm");
-  assert.equal(alwaysKey(bash("CI=1 /usr/bin/git status")), "bash:git");
-  for (const command of ["npm test && rm x", "ls | sh", "echo $(id)", "cat a > b", "a; b", "x\ny"]) assert.equal(alwaysKey(bash(command)), null, command);
+test("a shell command is remembered whole, and only a plain one that runs no handed-in code", () => {
+  assert.equal(alwaysKey(bash("npm test")), "bash:npm test");
+  assert.equal(alwaysKey(bash("git  status")), "bash:git status");
+  for (const command of ["npm test && rm x", "ls | sh", "echo $(id)", "cat a > b", "a; b", "x\ny", "CI=1 git status",
+    "/tmp/git status", "./run", "node -e x", "bash script.sh", "python3 x.py", "env FOO=1 ls", "xargs rm", "git -c core.pager=x log",
+    "echo 'hi'", "sed s/a/b/ f", "find . -delete", "ls ~", "echo $HOME"]) {
+    assert.equal(alwaysKey(bash(command)), null, command);
+  }
+  assert.equal(alwaysKey({ name: "write", arguments: { path: "a" } }), null);
+  assert.equal(alwaysKey({ name: "edit", arguments: { path: "a" } }), null);
   assert.equal(alwaysKey({ name: "phone_location" }), "phone_location");
-  assert.equal(alwaysLabel("bash:npm"), "Always allow npm commands");
+  assert.equal(alwaysLabel("bash:npm test"), "Always allow `npm test`");
   assert.equal(alwaysLabel("pap__run"), "Always allow pap__run");
 });
 
 test("the list lives in the agent's folder, and the agent can't edit it unasked", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "always-"));
   const always = new AlwaysAllow(cwd);
-  always.add("bash:npm");
-  always.add("bash:npm");
-  assert.deepEqual(new AlwaysAllow(cwd).list(), ["bash:npm"]);
-  assert.equal(always.remove("bash:npm"), true);
+  always.add("bash:npm test");
+  always.add("bash:npm test");
+  assert.deepEqual(new AlwaysAllow(cwd).list(), ["bash:npm test"]);
+  assert.equal(always.remove("bash:npm test"), true);
   assert.deepEqual(always.list(), []);
   assert.ok(riskOf({ name: "write", arguments: { path: "always-allow.json" } }, { cwd }));
 });
@@ -40,10 +46,13 @@ async function run(call, always, answer) {
 test("always allow skips the question next time; hard rules still ask", async () => {
   const always = new AlwaysAllow(fs.mkdtempSync(path.join(os.tmpdir(), "always-")));
   let r = await run(bash("npm test"), always, { allow: true, always: true });
-  assert.equal(r.asked[0].always, "Always allow npm commands");
-  assert.deepEqual(always.list(), ["bash:npm"]);
-  r = await run(bash("npm run build"), always, { allow: false });
+  assert.equal(r.asked[0].always, "Always allow `npm test`");
+  assert.deepEqual(always.list(), ["bash:npm test"]);
+  r = await run(bash("npm test"), always, { allow: false });
   assert.equal(r.asked.length, 0);
+  r = await run(bash("npm run build"), always, { allow: false });
+  assert.equal(r.asked.length, 1, "a different command still asks");
+  r = await run(bash("npm test"), always, { allow: false });
   assert.equal(r.result, undefined);
   r = await run(bash("rm -rf node_modules"), new AlwaysAllow(fs.mkdtempSync(path.join(os.tmpdir(), "always-"))), { allow: true, always: true });
   assert.equal(r.asked[0].always, undefined, "a hard rule offers no always");
