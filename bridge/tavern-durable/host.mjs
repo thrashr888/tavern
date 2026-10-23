@@ -272,7 +272,9 @@ function heartbeatPrompt() {
 
 function heartbeatState() {
   const hasChecks = loadChecks(AGENT_CWD) != null;
-  if (heartbeatMinutes <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
+  if (heartbeatMinutes <= 0) return null;
+  // Scheduled but with nothing to run: Tavern shows the schedule and says the file is missing.
+  if (!heartbeatPrompt() && !hasChecks) return { everyMinutes: heartbeatMinutes, empty: true };
   return { everyMinutes: heartbeatMinutes, last: lastHeartbeat, next: nextHeartbeat,
            checks: hasChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors, week: beatsThisWeek(BEATS_LOG) } : null };
 }
