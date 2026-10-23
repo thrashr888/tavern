@@ -110,17 +110,21 @@ public struct PiHeartbeat: Equatable, Sendable {
     /// The host's checks this week: beats that woke the agent, and quiet ones that cost nothing.
     public var wokeThisWeek: Int?
     public var quietThisWeek: Int?
+    /// Scheduled, but the agent's folder has no HEARTBEAT.md or heartbeat.json, so beats do nothing.
+    public var empty = false
 
-    public init(everyMinutes: Int, last: Date? = nil, next: Date? = nil) {
+    public init(everyMinutes: Int, last: Date? = nil, next: Date? = nil, empty: Bool = false) {
         self.everyMinutes = everyMinutes
         self.last = last
         self.next = next
+        self.empty = empty
     }
 
     init?(json: JSONValue?) {
         guard let minutes = json?["everyMinutes"]?.doubleValue, minutes > 0 else { return nil }
         self.init(everyMinutes: Int(minutes), last: PiEntries.parseTimestamp(json?["last"]?.stringValue),
-                  next: PiEntries.parseTimestamp(json?["next"]?.stringValue))
+                  next: PiEntries.parseTimestamp(json?["next"]?.stringValue),
+                  empty: json?["empty"]?.boolValue == true)
         if let week = json?["checks"]?["week"] {
             wokeThisWeek = week["woke"]?.doubleValue.map(Int.init)
             quietThisWeek = week["quiet"]?.doubleValue.map(Int.init)
@@ -130,6 +134,7 @@ public struct PiHeartbeat: Equatable, Sendable {
     /// "Every 30 min · next 4:30 PM".
     public var summary: String {
         var parts = ["Every \(everyMinutes) min"]
+        if empty { return parts[0] + ", but there's no HEARTBEAT.md in the agent's folder yet" }
         if let next { parts.append("next \(next.formatted(date: .omitted, time: .shortened))") }
         return parts.joined(separator: " · ")
     }

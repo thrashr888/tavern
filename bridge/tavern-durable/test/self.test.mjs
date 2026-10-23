@@ -33,6 +33,7 @@ test("heartbeat_set changes the schedule only after Paul allows it, and it survi
   assert.equal(s.asked[0].message, "busier inbox");
   assert.deepEqual(s.set, [15]);
   assert.match(result.content[0].text, /every 15 min/);
+  assert.match(result.content[0].text, /no HEARTBEAT\.md/, "says beats do nothing without the file");
   assert.equal(savedMinutes(s.cwd, 30), 15);
 
   s = setup({ allow: false });
