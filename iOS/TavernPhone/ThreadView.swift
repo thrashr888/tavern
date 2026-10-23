@@ -507,6 +507,21 @@ private struct AgentInfoSheet: View {
                         LabeledContent("Spent", value: usage.cost.formatted(.currency(code: "USD")))
                     }
                 }
+                if !session.config.alwaysAllow.isEmpty {
+                    Section {
+                        ForEach(session.config.alwaysAllow, id: \.self) { key in
+                            HStack {
+                                Text(key.hasPrefix("bash:") ? String(key.dropFirst(5)) : key).font(.callout.monospaced())
+                                Spacer()
+                                Button("Ask again") { Task { await session.forgetAlwaysAllow(key) } }.font(.footnote)
+                            }
+                        }
+                    } header: {
+                        Text("Always allowed")
+                    } footer: {
+                        Text("Runs without asking. Deletes, sudo, secrets and force-pushes still ask.")
+                    }
+                }
                 if let heartbeat = session.config.heartbeat {
                     Section("Heartbeat") {
                         LabeledContent("Every", value: "\(heartbeat.everyMinutes) min")
