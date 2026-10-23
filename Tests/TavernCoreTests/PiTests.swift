@@ -698,4 +698,11 @@ final class StepChangeTests: XCTestCase {
         XCTAssertEqual(change.lines.map(\.text), ["one", "two"])
         XCTAssertNil(StepChange(toolName: "bash", arguments: ["command": "ls"], diff: nil))
     }
+
+    func testHeartbeatScheduledWithoutAFileSaysSo() throws {
+        let empty = try XCTUnwrap(PiHeartbeat(json: ["everyMinutes": .number(5), "empty": true]))
+        XCTAssertEqual(empty.summary, "Every 5 min, but there's no HEARTBEAT.md in the agent's folder yet")
+        XCTAssertEqual(PiHeartbeat(json: ["everyMinutes": .number(30)])?.summary, "Every 30 min")
+        XCTAssertNil(PiHeartbeat(json: ["everyMinutes": .number(0)]))
+    }
 }
