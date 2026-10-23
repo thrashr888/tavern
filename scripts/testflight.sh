@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "Needs xcodegen: brew install xcodegen" >&2; exit 1; }
+# App Store Connect rejects builds from Xcode betas, so use the release Xcode. Homebrew's rsync on
+# PATH breaks the IPA step of the export, so it runs with the system tools first.
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 scripts/party.sh
 xcodegen generate --spec iOS/project.yml --quiet
