@@ -31,6 +31,8 @@ public enum PiCommand: Equatable, Sendable {
     case callCardTool(server: String, name: String, arguments: JSONValue)
     /// A durable host's heartbeat checks, dry run: what's new, without waking the agent.
     case heartbeatCheck
+    /// Takes back one "always allow" (a key from `get_state.alwaysAllow`).
+    case forgetAlwaysAllow(String)
 
     public var type: String {
         switch self {
@@ -48,6 +50,7 @@ public enum PiCommand: Equatable, Sendable {
         case .readCard: return "read_card"
         case .callCardTool: return "call_card_tool"
         case .heartbeatCheck: return "heartbeat_check"
+        case .forgetAlwaysAllow: return "forget_always_allow"
         }
     }
 
@@ -88,6 +91,8 @@ public enum PiCommand: Equatable, Sendable {
             object["server"] = .string(server)
             object["name"] = .string(name)
             object["arguments"] = arguments
+        case .forgetAlwaysAllow(let key):
+            object["key"] = .string(key)
         case .abort, .compact, .getState, .getSessionStats, .getAvailableModels, .heartbeatCheck:
             break
         }
@@ -123,12 +128,14 @@ public struct PiDialog: Equatable, Identifiable, Sendable {
     public var options: [String]
     public var placeholder: String?
     public var prefill: String?
+    /// For an approval the host lets Paul make permanent: "Always allow npm commands".
+    public var alwaysLabel: String?
 
     /// A durable host asking before a risky tool call runs (tavern-durable's approvals).
     public var isApproval: Bool { method == .confirm && id.hasPrefix("approval-") }
 
     public init(id: String, method: Method, title: String, message: String? = nil,
-                options: [String] = [], placeholder: String? = nil, prefill: String? = nil) {
+                options: [String] = [], placeholder: String? = nil, prefill: String? = nil, alwaysLabel: String? = nil) {
         self.id = id
         self.method = method
         self.title = title
@@ -136,6 +143,7 @@ public struct PiDialog: Equatable, Identifiable, Sendable {
         self.options = options
         self.placeholder = placeholder
         self.prefill = prefill
+        self.alwaysLabel = alwaysLabel
     }
 }
 
@@ -143,6 +151,8 @@ public struct PiDialog: Equatable, Identifiable, Sendable {
 public enum PiDialogAnswer: Equatable, Sendable {
     case value(String)
     case confirmed(Bool)
+    /// Allow, and don't ask again for this tool (the dialog's `alwaysLabel`).
+    case alwaysAllow
     case cancelled
 
     public func json(dialogID: String) -> JSONValue {
@@ -150,6 +160,9 @@ public enum PiDialogAnswer: Equatable, Sendable {
         switch self {
         case .value(let value): object["value"] = .string(value)
         case .confirmed(let confirmed): object["confirmed"] = .bool(confirmed)
+        case .alwaysAllow:
+            object["confirmed"] = true
+            object["always"] = true
         case .cancelled: object["cancelled"] = true
         }
         return .object(object)
@@ -198,7 +211,8 @@ public enum PiRecord: Equatable, Sendable {
                 message: json["message"]?.stringValue,
                 options: json["options"]?.arrayValue?.compactMap(\.stringValue) ?? [],
                 placeholder: json["placeholder"]?.stringValue,
-                prefill: json["prefill"]?.stringValue
+                prefill: json["prefill"]?.stringValue,
+                alwaysLabel: json["always"]?.stringValue
             ))
         default:
             return .event(type: type, raw: json)

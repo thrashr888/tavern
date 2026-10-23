@@ -1,0 +1,410 @@
+{
+  "spells": [
+    {
+      "id": "SB-02",
+      "name": "crew-email-handoff",
+      "title": "Crew email handoff",
+      "description": "Crew email handoff. Use when: Work needs another crew member.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/crew-email-handoff/SKILL.md"
+    },
+    {
+      "id": "SB-03",
+      "name": "project-tracking",
+      "title": "Project tracking",
+      "description": "Project tracking. Use when: Any new project or task.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/project-tracking/SKILL.md"
+    },
+    {
+      "id": "SB-04",
+      "name": "daily-progress-sweep",
+      "title": "Daily progress sweep",
+      "description": "Daily progress sweep. Use when: Daily ~4pm.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/daily-progress-sweep/SKILL.md"
+    },
+    {
+      "id": "SB-05",
+      "name": "new-member-onboarding",
+      "title": "New member onboarding",
+      "description": "New member onboarding. Use when: A new agent joins.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/new-member-onboarding/SKILL.md"
+    },
+    {
+      "id": "SB-06",
+      "name": "needs-paul-escalation",
+      "title": "Needs-Paul escalation",
+      "description": "Needs-Paul escalation. Use when: Blocked on a Paul decision or credential.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/needs-paul-escalation/SKILL.md"
+    },
+    {
+      "id": "SB-08",
+      "name": "crew-mail-check",
+      "title": "Crew mail check",
+      "description": "Crew mail check. Use when: Hourly, or when Paul says there's new mail.",
+      "kind": "ritual",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "quill"
+      ],
+      "version": 1,
+      "path": "skills/crew-mail-check/SKILL.md"
+    },
+    {
+      "id": "SB-09",
+      "name": "repo-change-to-draft-pr",
+      "title": "Repo change to draft PR",
+      "description": "Repo change to draft PR. Use when: Paul says go on code work in one of his repos.",
+      "kind": "spell",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/repo-change-to-draft-pr/SKILL.md"
+    },
+    {
+      "id": "SB-10",
+      "name": "research-to-recommendation",
+      "title": "Research to recommendation",
+      "description": "Research to recommendation. Use when: A question needs sources and a call (feasibility, tool choice).",
+      "kind": "spell",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/research-to-recommendation/SKILL.md"
+    },
+    {
+      "id": "SB-11",
+      "name": "default-owner-fan-out",
+      "title": "Default-owner fan-out",
+      "description": "Default-owner fan-out. Use when: A project arrives with no named owner.",
+      "kind": "spell",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "quill"
+      ],
+      "version": 1,
+      "path": "skills/default-owner-fan-out/SKILL.md"
+    },
+    {
+      "id": "SB-12",
+      "name": "outward-action-check",
+      "title": "Outward-action check",
+      "description": "Outward-action check. Use when: Before sending, forwarding, deleting, merging or publishing.",
+      "kind": "spell",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/outward-action-check/SKILL.md"
+    },
+    {
+      "id": "SB-13",
+      "name": "mac-app-release",
+      "title": "Mac app release",
+      "description": "Mac app release. Use when: Paul OKs a release of one of his Mac apps.",
+      "kind": "ritual",
+      "owner": "quill",
+      "review_owner": "rook",
+      "applies_to": [
+        "quill"
+      ],
+      "version": 1,
+      "path": "skills/mac-app-release/SKILL.md"
+    },
+    {
+      "id": "SB-14",
+      "name": "source-check-research",
+      "title": "Source-check research",
+      "description": "Source-check research. Use when: A claim or feasibility question needs verification.",
+      "kind": "spell",
+      "owner": "flux",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/source-check-research/SKILL.md"
+    },
+    {
+      "id": "SB-15",
+      "name": "tool-lane-execution",
+      "title": "Tool-lane execution",
+      "description": "Tool-lane execution. Use when: A task needs Gmail/Drive/GitHub/Linear/Sheets/code.",
+      "kind": "spell",
+      "owner": "flux",
+      "review_owner": "rook",
+      "applies_to": [
+        "flux"
+      ],
+      "version": 1,
+      "path": "skills/tool-lane-execution/SKILL.md"
+    },
+    {
+      "id": "SB-16",
+      "name": "smithery-mail-check",
+      "title": "Smithery mail check",
+      "description": "Smithery mail check. Use when: Every 30 min (standing schedule).",
+      "kind": "ritual",
+      "owner": "peter",
+      "review_owner": "rook",
+      "applies_to": [
+        "peter"
+      ],
+      "version": 1,
+      "path": "skills/smithery-mail-check/SKILL.md"
+    },
+    {
+      "id": "SB-17",
+      "name": "verify-remote-host",
+      "title": "Verify remote host before asserting",
+      "description": "Verify remote host before asserting. Use when: Before stating any fact about ser8, the M3 or the MacBook Pro (identity, load, disk, tools, models).",
+      "kind": "spell",
+      "owner": "peter",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/verify-remote-host/SKILL.md"
+    },
+    {
+      "id": "SB-18",
+      "name": "pi-agent-model-switch",
+      "title": "Pi agent model switch",
+      "description": "Pi agent model switch. Use when: Paul orders a model change for Tally, Ember or Flint.",
+      "kind": "spell",
+      "owner": "peter",
+      "review_owner": "rook",
+      "applies_to": [
+        "peter"
+      ],
+      "version": 1,
+      "path": "skills/pi-agent-model-switch/SKILL.md"
+    },
+    {
+      "id": "SB-19",
+      "name": "artwork-creation-and-handoff",
+      "title": "Artwork creation and handoff",
+      "description": "Artwork creation and handoff. Use when: A project needs new or revised artwork and a usable handoff.",
+      "kind": "spell",
+      "owner": "wololo",
+      "review_owner": "rook",
+      "applies_to": [
+        "wololo"
+      ],
+      "version": 1,
+      "path": "skills/artwork-creation-and-handoff/SKILL.md"
+    },
+    {
+      "id": "SB-20",
+      "name": "evidence-backed-project-updates",
+      "title": "Evidence-backed project updates",
+      "description": "Evidence-backed project updates. Use when: A milestone, blocker or status request makes a project update useful.",
+      "kind": "spell",
+      "owner": "wololo",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/evidence-backed-project-updates/SKILL.md"
+    },
+    {
+      "id": "SB-21",
+      "name": "delivery-verification",
+      "title": "Delivery verification",
+      "description": "Delivery verification. Use when: A file, message, link or project update has been delivered or saved.",
+      "kind": "spell",
+      "owner": "wololo",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/delivery-verification/SKILL.md"
+    },
+    {
+      "id": "SB-22",
+      "name": "inbox-triage-and-draft-on-request",
+      "title": "Inbox triage and draft-on-request",
+      "description": "Inbox triage and draft-on-request. Use when: Scheduled inbox check, or new mail that may need a reply.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/inbox-triage-and-draft-on-request/SKILL.md"
+    },
+    {
+      "id": "SB-23",
+      "name": "imperfect-foods-cart-review",
+      "title": "Review and update Imperfect Foods cart",
+      "description": "Review and update Imperfect Foods cart. Use when: Weekly. Cart locks Tuesday 8:45 PM PT; nudge Tuesday afternoon if the cart is untouched.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/imperfect-foods-cart-review/SKILL.md"
+    },
+    {
+      "id": "SB-24",
+      "name": "friday-retro",
+      "title": "Friday retro",
+      "description": "Friday retro. Use when: Weekly, Fridays 9am PT.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/friday-retro/SKILL.md"
+    },
+    {
+      "id": "SB-25",
+      "name": "monday-planning",
+      "title": "Monday planning (start of week)",
+      "description": "Monday planning (start of week). Use when: Weekly, Mondays 6:30am PT, before Paul wakes.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/monday-planning/SKILL.md"
+    },
+    {
+      "id": "SB-26",
+      "name": "spellbook-review",
+      "title": "Review and update the Spellbook",
+      "description": "Review and update the Spellbook. Use when: Weekly, Fridays after the retro (confirmed by Paul 2026-10-21).",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 2,
+      "path": "skills/spellbook-review/SKILL.md"
+    },
+    {
+      "id": "SB-27",
+      "name": "email-events-to-calendar",
+      "title": "Add email events to the calendar",
+      "description": "Add email events to the calendar. Use when: Email mentions an event or date (e.g. the \"data outpost\" event), on inbox scan.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/email-events-to-calendar/SKILL.md"
+    },
+    {
+      "id": "SB-28",
+      "name": "multi-agent-review",
+      "title": "Multi-agent review",
+      "description": "Multi-agent review. Use when: Work by one agent needs a second agent's check before it counts (plan, doc, PR, research).",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/multi-agent-review/SKILL.md"
+    },
+    {
+      "id": "SB-29",
+      "name": "project-handoff",
+      "title": "Project handoff",
+      "description": "Project handoff. Use when: A project or task moves from one agent to another.",
+      "kind": "spell",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/project-handoff/SKILL.md"
+    },
+    {
+      "id": "SB-30",
+      "name": "local-data-fetching",
+      "title": "Local data fetching (right content, where the agent works)",
+      "description": "Local data fetching (right content, where the agent works). Use when: An agent needs content another can fetch (tweet text, X thread, private doc, image description) that the requester's tools block or lack.",
+      "kind": "spell",
+      "owner": "flux",
+      "review_owner": "rook",
+      "applies_to": [
+        "all"
+      ],
+      "version": 1,
+      "path": "skills/local-data-fetching/SKILL.md"
+    },
+    {
+      "id": "SB-31",
+      "name": "archive-old-smithery-mail",
+      "title": "Clean up and archive old Smithery emails",
+      "description": "Clean up and archive old Smithery emails. Use when: Daily Smithery sweep (~4pm), and when Paul asks for a cleanup.",
+      "kind": "ritual",
+      "owner": "rook",
+      "review_owner": "rook",
+      "applies_to": [
+        "rook"
+      ],
+      "version": 1,
+      "path": "skills/archive-old-smithery-mail/SKILL.md"
+    }
+  ]
+}

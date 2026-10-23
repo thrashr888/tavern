@@ -778,6 +778,10 @@ struct DialogBanner: View {
                 HStack {
                     Spacer()
                     Button("Deny") { onAnswer(.confirmed(false)) }.controlSize(.large)
+                    if let always = dialog.alwaysLabel {
+                        Button(always) { onAnswer(.alwaysAllow) }.controlSize(.large)
+                            .help("Allow this, and don't ask again. Undo it in the agent's About tab.")
+                    }
                     Button("Allow") { onAnswer(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
                 }
             case .confirm:
