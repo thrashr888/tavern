@@ -45,6 +45,7 @@ public enum ApprovalLog {
     static func describe(_ answer: PiDialogAnswer) -> String {
         switch answer {
         case .confirmed(true): return "Approved"
+        case .alwaysAllow: return "Always allowed"
         case .confirmed(false): return "Declined"
         case .cancelled: return "Cancelled"
         case .value(let value): return "Answered “\(value)”"

@@ -314,6 +314,13 @@ public final class PiAgentSession: ObservableObject {
         return ok ? (summary ?? "No checks for this agent") : nil
     }
 
+    /// Takes back an "always allow" and refreshes the list.
+    public func forgetAlwaysAllow(_ key: String) async {
+        _ = await run(.forgetAlwaysAllow(key)) { response in
+            self.config.alwaysAllow = response.data?["alwaysAllow"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        }
+    }
+
     /// Hands the agent an outside happening (durable hosts only); the host runs each `key` once.
     public func deliverEvent(source: String, text: String, key: String) async {
         guard config.durable else { return }

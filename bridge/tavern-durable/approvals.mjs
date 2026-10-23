@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { alwaysKey, alwaysLabel } from "./always.mjs";
 
 const HOME = os.homedir();
 
@@ -47,6 +48,9 @@ const SECRET_PATHS = [
   /(^|\/)Library\/LaunchAgents(\/|$)/,
   // Heartbeat checks run without asking, so changing what they call needs Paul.
   /(^|\/)\.?heartbeat(-state|-schedule)?\.json$/i, // any case: macOS paths ignore it
+  // What Paul said to always allow, and the host's state it lives in: the agent can't add to it unasked.
+  /(^|\/)always-allow\.json$/i,
+  /(^|\/)\.local\/state\/tavern-durable(\/|$)/,
 ];
 
 /**
@@ -172,8 +176,8 @@ export class Approvals {
   }
 
   /** Settles a question; returns false for an unknown id. */
-  answer(id, allow, note) {
-    return this.reply(id, { allow: allow === true, ...(note ? { note } : {}) });
+  answer(id, allow, note, always = false) {
+    return this.reply(id, { allow: allow === true, ...(note ? { note } : {}), ...(allow === true && always ? { always: true } : {}) });
   }
 
   /** Settles a question with any answer: `{value}` or `{cancelled}` for the ask tool's dialogs. */
@@ -211,11 +215,16 @@ export function approvalExtension(approvals, options) {
             if (!risk) return undefined;
             let decision = await api.memo("tavern.approval", context);
             if (decision === undefined) {
-              // A routine step the decision model is sure of runs without Paul; anything else asks.
-              const verdict = risk.hard ? null : await options?.judge?.verdict(call, risk.reason);
-              const answer = verdict?.allow
-                ? { allow: true, note: "auto", by: verdict.model, p: verdict.p }
-                : await approvals.ask({ id: `approval-${api.taskId}`, ...describe(call, risk.reason, verdict) }, context?.abortSignal);
+              // Paul's "always allow", then a decision model sure it's routine, run without asking;
+              // anything else, and every hard rule, asks.
+              const key = risk.hard ? null : alwaysKey(call);
+              const always = key != null && options?.always?.has(key);
+              const verdict = risk.hard || always ? null : await options?.judge?.verdict(call, risk.reason);
+              const answer = always ? { allow: true, note: "always", key }
+                : verdict?.allow ? { allow: true, note: "auto", by: verdict.model, p: verdict.p }
+                : await approvals.ask({ id: `approval-${api.taskId}`, ...describe(call, risk.reason, verdict),
+                                        ...(key && options?.always ? { always: alwaysLabel(key) } : {}) }, context?.abortSignal);
+              if (answer?.always && key) options?.always?.add(key);
               decision = await api.memo("tavern.approval", answer, context);
               if (verdict?.allow) options?.notify?.(`Ran ${call?.name ?? "a tool"} without asking: ${verdict.model} judged it routine (${Math.round(verdict.p * 100)}%).`);
             }
