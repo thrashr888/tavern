@@ -13,6 +13,9 @@ struct ThreadView: View {
     @State private var images: [PiImage] = []
     @State private var showingInfo = false
     @State private var shownRows = 120
+    @StateObject private var dictation = Dictation()
+    /// The draft when dictation started; what's heard goes after it.
+    @State private var dictationBase = ""
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -59,7 +62,7 @@ struct ThreadView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             Text(agent.name).font(.headline).foregroundStyle(.primary)
                             Text(session.dialog != nil ? "Waiting on you" : session.presence.label)
-                                .font(.caption2).foregroundStyle(session.dialog != nil ? .orange : .secondary)
+                                .font(.caption2).foregroundStyle(session.dialog != nil ? Color.tavernAccent : .secondary)
                         }
                     }
                 }
@@ -71,6 +74,11 @@ struct ThreadView: View {
         }
         .sheet(isPresented: $showingInfo) { AgentInfoSheet(agent: agent, session: session) }
         .onChange(of: photos) { _, items in Task { await load(items) } }
+        .onChange(of: dictation.text) { _, heard in
+            guard dictation.listening, !heard.isEmpty else { return }
+            draft = dictationBase.isEmpty ? heard : dictationBase + " " + heard
+        }
+        .onDisappear { dictation.stop() }
     }
 
     private func refresh() async {
@@ -91,6 +99,7 @@ struct ThreadView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let error = dictation.error { Text(error).font(.caption).foregroundStyle(.red) }
             if !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
@@ -117,10 +126,20 @@ struct ThreadView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                Button {
+                    if !dictation.listening { dictationBase = draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    dictation.toggle()
+                } label: {
+                    Image(systemName: dictation.listening ? "mic.fill" : "mic").font(.system(size: 18))
+                        .foregroundStyle(dictation.listening ? Color.red : Color.tavernAccent)
+                        .symbolEffect(.pulse, isActive: dictation.listening)
+                        .frame(width: 30, height: 34)
+                }
+                .accessibilityLabel(dictation.listening ? "Stop dictation" : "Dictate")
                 Button(action: send) {
                     Image(systemName: session.isWorking ? "text.append" : "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background(canSend ? Color.orange : Color.secondary.opacity(0.4), in: Circle())
+                        .background(canSend ? Color.tavernAccent : Color.secondary.opacity(0.4), in: Circle())
                 }
                 .disabled(!canSend)
                 .accessibilityLabel(session.isWorking ? "Queue" : "Send")
@@ -137,6 +156,7 @@ struct ThreadView: View {
 
     /// Sends now, or queues it after the current turn when the agent is busy.
     private func send() {
+        dictation.stop()
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         let attached = images
@@ -178,7 +198,7 @@ private struct ConnectionBanner: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.orange.opacity(0.15))
+            .background(Color.tavernAccent.opacity(0.15))
         }
     }
 
@@ -291,9 +311,21 @@ struct MarkdownView: View {
                     inline(text).foregroundStyle(.secondary).padding(.leading, 10)
                         .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 3) }
                 case .table(let source):
+                    let rows = MarkdownBlock.tableRows(source)
                     ScrollView(.horizontal, showsIndicators: false) {
-                        Text(source).font(.system(.caption, design: .monospaced))
+                        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                                GridRow {
+                                    ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                                        inline(cell).font(.footnote.weight(index == 0 ? .semibold : .regular))
+                                    }
+                                }
+                                if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                            }
+                        }
+                        .padding(10)
                     }
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                 case .rule:
                     Divider()
                 }
@@ -318,9 +350,9 @@ struct Bubble: View {
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(mine ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color(.secondarySystemBackground)),
+                .background(mine ? AnyShapeStyle(Color.tavernAccent) : AnyShapeStyle(Color(.secondarySystemBackground)),
                             in: RoundedRectangle(cornerRadius: 16))
-                .foregroundStyle(mine ? Color.white : Color.primary)
+                .foregroundStyle(mine ? Color.onTavernAccent : Color.primary)
             if !mine { Spacer(minLength: 48) }
         }
     }
@@ -400,7 +432,7 @@ private struct ApprovalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(dialog.title, systemImage: "hand.raised.fill").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+            Label(dialog.title, systemImage: "hand.raised.fill").font(.subheadline.weight(.semibold)).foregroundStyle(Color.tavernAccent)
             if let message = dialog.message, !message.isEmpty {
                 ScrollView { Text(message).font(.footnote.monospaced()).frame(maxWidth: .infinity, alignment: .leading) }
                     .frame(maxHeight: 120)
@@ -413,7 +445,7 @@ private struct ApprovalCard: View {
                 HStack {
                     Button("Deny", role: .destructive) { reply(.confirmed(false)) }.buttonStyle(.bordered)
                     Spacer()
-                    Button("Allow") { reply(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(.orange)
+                    Button("Allow") { reply(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(Color.tavernAccent)
                 }
             case .select:
                 ForEach(dialog.options, id: \.self) { option in
@@ -425,13 +457,13 @@ private struct ApprovalCard: View {
                 HStack {
                     Button("Cancel", role: .cancel) { reply(.cancelled) }
                     Spacer()
-                    Button("Send") { reply(.value(answer)) }.buttonStyle(.borderedProminent).tint(.orange)
+                    Button("Send") { reply(.value(answer)) }.buttonStyle(.borderedProminent).tint(Color.tavernAccent)
                 }
             }
         }
         .padding(12)
-        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.orange.opacity(0.45)))
+        .background(Color.tavernAccent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.tavernAccent.opacity(0.45)))
         .padding(.horizontal, 12)
         .padding(.top, 8)
     }

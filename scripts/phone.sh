@@ -46,6 +46,24 @@ if [ -z "${TAVERN_AGENTS:-}" ] && [ -f "$roster" ]; then
   TAVERN_AGENTS="${agents}Demo=127.0.0.1:19614"
 fi
 
+# The party's art, lore and spellbook from the Mac, bundled into the app (iOS/Party is gitignored:
+# it's personal). Avatars and the portrait are scaled down; only the roster's name, lore and stars go.
+tavern_home="${TAVERN_HOME:-$HOME/Library/Application Support/Tavern}"
+party=iOS/Party
+rm -rf "$party" && mkdir -p "$party/avatars"
+for file in "$tavern_home"/avatars/*.{jpg,jpeg,png,heic}; do
+  [ -f "$file" ] && sips -s format jpeg -Z 256 "$file" --out "$party/avatars/$(basename "${file%.*}").jpg" >/dev/null
+done
+for file in "$tavern_home"/portrait.{jpg,jpeg,png,heic}; do
+  [ -f "$file" ] && { sips -s format jpeg -Z 1600 "$file" --out "$party/portrait.jpg" >/dev/null; break; }
+done
+[ -f "$roster" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); json.dump({k: r[k] for k in ("partyName", "lore", "spellbookStars") if k in r}, open(sys.argv[2], "w"))' "$roster" "$party/party.json"
+if [ -f "$tavern_home/spellbook/index.json" ]; then
+  mkdir -p "$party/spellbook"
+  (cd "$tavern_home/spellbook" && cp index.json "$OLDPWD/$party/spellbook/" && find skills -name SKILL.md -exec rsync -R {} "$OLDPWD/$party/spellbook/" \;)
+  git -C "$tavern_home/spellbook" rev-parse --short HEAD > "$party/spellbook/COMMIT" 2>/dev/null || true
+fi
+
 xcodegen generate --spec iOS/project.yml --quiet
 device="${SIMULATOR:-$(xcrun simctl list devices available | awk -F'[()]' '/iPhone/ {print $2; exit}')}"
 [ -n "$device" ] || { echo "No iPhone simulator; install one with xcodebuild -downloadPlatform iOS" >&2; exit 1; }

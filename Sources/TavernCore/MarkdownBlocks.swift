@@ -82,6 +82,37 @@ public enum MarkdownBlock: Equatable, Sendable {
         return blocks
     }
 
+    /// A table block's rows as cells (header first), without the `|---|` separator row. Pipes
+    /// inside backticks or escaped as `\\|` stay in their cell.
+    public static func tableRows(_ source: String) -> [[String]] {
+        source.split(separator: "\n").compactMap { raw -> [String]? in
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("|") { line.removeFirst() }
+            if line.hasSuffix("|"), !line.hasSuffix("\\|") { line.removeLast() }
+            var cells: [String] = []
+            var cell = ""
+            var inCode = false
+            var previous: Character?
+            for character in line {
+                if character == "`" { inCode.toggle() }
+                if character == "|", !inCode, previous != "\\" {
+                    cells.append(cell)
+                    cell = ""
+                } else if character == "|", previous == "\\" {
+                    cell.removeLast()
+                    cell.append(character)
+                } else {
+                    cell.append(character)
+                }
+                previous = character
+            }
+            cells.append(cell)
+            let trimmed = cells.map { $0.trimmingCharacters(in: .whitespaces) }
+            let separator = trimmed.allSatisfy { !$0.isEmpty && $0.allSatisfy { "-:".contains($0) } }
+            return separator ? nil : trimmed
+        }
+    }
+
     private static func headingLevel(_ line: String) -> Int? {
         let hashes = line.prefix { $0 == "#" }.count
         guard (1...6).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }

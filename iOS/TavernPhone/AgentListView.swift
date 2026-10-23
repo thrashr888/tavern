@@ -1,7 +1,7 @@
 import SwiftUI
 import TavernCore
 
-/// The party: each agent with its state, and an orange dot when it's waiting on you.
+/// The party: each agent with its state, and an accent dot when it's waiting on you.
 struct AgentListView: View {
     @EnvironmentObject private var model: PhoneModel
     @State private var adding = false
@@ -40,11 +40,11 @@ private struct AgentRow: View {
         HStack(spacing: 12) {
             Avatar(name: agent.name)
                 .overlay(alignment: .topTrailing) {
-                    if needsYou { Circle().fill(.orange).frame(width: 12, height: 12).overlay(Circle().stroke(.background, lineWidth: 2)) }
+                    if needsYou { Circle().fill(Color.tavernAccent).frame(width: 12, height: 12).overlay(Circle().stroke(.background, lineWidth: 2)) }
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.name).font(.headline)
-                Text(status).font(.subheadline).foregroundStyle(needsYou ? .orange : .secondary).lineLimit(1)
+                Text(status).font(.subheadline).foregroundStyle(needsYou ? Color.tavernAccent : .secondary).lineLimit(1)
             }
         }
         .padding(.vertical, 2)
@@ -67,11 +67,16 @@ struct Avatar: View {
     var size: CGFloat = 40
 
     var body: some View {
-        Text(String(name.prefix(1)).uppercased())
-            .font(.system(size: size * 0.45, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(Color(hue: hue, saturation: 0.5, brightness: 0.65), in: Circle())
+        // The party's art from the Mac (avatars/<id>), else an initial on a color of its own.
+        if let image = Party.avatar(name.lowercased()) {
+            Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+        } else {
+            Text(String(name.prefix(1)).uppercased())
+                .font(.system(size: size * 0.45, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(Color(hue: hue, saturation: 0.5, brightness: 0.65), in: Circle())
+        }
     }
 
     /// A stable color per name.

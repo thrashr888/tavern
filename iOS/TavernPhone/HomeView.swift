@@ -7,6 +7,14 @@ struct HomeView: View {
 
     var body: some View {
         List {
+            if let portrait = Party.portrait {
+                Section {
+                    // The party, edge to edge, as on the Mac Dashboard.
+                    Image(uiImage: portrait).resizable().scaledToFill()
+                        .frame(maxWidth: .infinity).frame(height: 190).clipped()
+                        .listRowInsets(EdgeInsets())
+                }
+            }
             Section("Needs you") {
                 let waiting = model.agents.filter { needsYou($0) }
                 if waiting.isEmpty {
@@ -25,10 +33,29 @@ struct HomeView: View {
                     }
                 }
             }
+            if let lore = Party.info.lore, !lore.isEmpty {
+                Section("Lore") {
+                    ForEach(lore) { link in
+                        Link(destination: link.url) {
+                            Label(link.title, systemImage: Self.symbol(link.kind)).foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
         }
-        .navigationTitle("Tavern")
+        .navigationTitle(Party.info.partyName ?? "Tavern")
         .refreshable {
             for agent in model.agents { await model.session(for: agent)?.reconnectNow() }
+        }
+    }
+
+    static func symbol(_ kind: LoreLink.Kind) -> String {
+        switch kind {
+        case .doc: "doc.text"
+        case .sheet: "tablecells"
+        case .linear: "list.bullet.rectangle"
+        case .folder: "folder"
+        case .link: "link"
         }
     }
 
@@ -50,7 +77,7 @@ private struct NeedsRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.dialog?.title ?? "\(agent.name) can't connect").font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text(session.dialog != nil ? "\(agent.name) is waiting on you" : session.presence.label)
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Color.tavernAccent)
             }
         }
     }
@@ -104,7 +131,7 @@ struct PresenceDot: View {
     }
 
     private var color: Color {
-        if waiting { return .orange }
+        if waiting { return Color.tavernAccent }
         switch presence {
         case .idle: return .green
         case .working: return .blue

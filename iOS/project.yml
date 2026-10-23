@@ -13,7 +13,12 @@ targets:
   TavernPhone:
     type: application
     platform: iOS
-    sources: [TavernPhone]
+    sources:
+      - TavernPhone
+      # The party's art, lore and spellbook, copied in by scripts/phone.sh (personal; not in git).
+      - path: Party
+        type: folder
+        optional: true
     dependencies:
       - package: Tavern
         product: TavernCore
@@ -29,5 +34,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # Hosts are tailnet or loopback addresses: plain TCP, no TLS of their own.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Tavern talks to your Pi agents' hosts on your network.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Tavern listens while you dictate a message.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Tavern turns your dictation into text, on the iPhone when it can.
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic

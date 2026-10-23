@@ -15,3 +15,5 @@ token*.json
 linear-key
 docs/Pi-Durable-Technical-Manual.pdf
 iOS/TavernPhone.xcodeproj/
+# Personal party data phone.sh copies into the iPhone build
+iOS/Party/

@@ -6,12 +6,14 @@ import UserNotifications
 @main
 struct TavernPhoneApp: App {
     @StateObject private var model = PhoneModel()
+    @StateObject private var pap = PAPPhone()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                .environmentObject(pap)
                 .onAppear { model.requestNotifications() }
         }
         .onChange(of: scenePhase) { _, phase in model.inBackground = phase != .active }
@@ -40,8 +42,20 @@ struct RootView: View {
             }
             .tabItem { Label("Agents", systemImage: "person.3") }
             .tag("agents")
+
+            NavigationStack { SpellsView() }
+                .tabItem { Label("Spells", systemImage: "sparkles") }
+                .tag("spells")
+
+            NavigationStack { MailView() }
+                .tabItem { Label("Mail", systemImage: "envelope") }
+                .tag("mail")
+
+            NavigationStack { LinearView() }
+                .tabItem { Label("Linear", systemImage: "list.bullet.rectangle") }
+                .tag("linear")
         }
-        .tint(.orange)
+        .tint(Color.tavernAccent)
     }
 
     @ViewBuilder private func destination(_ id: String) -> some View {
