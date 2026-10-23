@@ -184,7 +184,7 @@ final class LocalAgentRuntime {
         var streamed = ""
         do {
             let reply = try await LocalModel.reply(
-                to: prompt, instructions: instructions(skippingLatest: text != nil), tools: LocalModel.tools(for: self, trace: trace),
+                to: prompt, instructions: instructions(skippingLatest: text != nil), tools: LocalModel.tools(for: self, trace: trace, heartbeat: text?.hasPrefix("[Heartbeat ") == true),
                 model: { self.modelName = $0 },
                 onText: { [weak self] snapshot in
                     guard let self, snapshot.count > streamed.count, snapshot.hasPrefix(streamed) else { return }
@@ -265,7 +265,7 @@ final class LocalAgentRuntime {
 
     static let defaultHeartbeat = """
         Look over the new mail above. If something needs Paul (a person waiting on him, a deadline, \
-        a delivery or a bill), tell him in a sentence or two and remember anything worth keeping. \
+        a delivery or a bill), tell him in a sentence or two. \
         If nothing does, just say "Nothing new that needs you."
         """
 
@@ -477,9 +477,11 @@ enum LocalModel {
     }
 
     @MainActor
-    static func tools(for runtime: LocalAgentRuntime, trace: ToolTrace) -> [any Tool] {
+    /// A heartbeat turn reads other people's mail, so it gets only the read tools: nothing that
+    /// writes memory (a planted line would steer every later turn) or reveals where Paul is.
+    static func tools(for runtime: LocalAgentRuntime, trace: ToolTrace, heartbeat: Bool) -> [any Tool] {
         let reach = runtime.reach
-        return [
+        let all: [any Tool] = [
             PhoneTool<NoArguments>(name: "phone_location", description: "Where Paul's iPhone is right now: coordinates and the place name.", trace: trace) { _ in
                 try await describe(reach.sensor("phone_location"))
             },
@@ -506,6 +508,8 @@ enum LocalModel {
                 await runtime.recall(arguments.query)
             },
         ]
+        guard heartbeat else { return all }
+        return all.filter { ["mail_inbox", "linear_goals", "recall", "phone_battery"].contains($0.name) }
     }
 
     private static func describe(_ value: JSONValue) -> String {
