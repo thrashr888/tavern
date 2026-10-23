@@ -48,8 +48,9 @@ const SECRET_PATHS = [
   /(^|\/)Library\/LaunchAgents(\/|$)/,
   // Heartbeat checks run without asking, so changing what they call needs Paul.
   /(^|\/)\.?heartbeat(-state|-schedule)?\.json$/i, // any case: macOS paths ignore it
-  // What Paul said to always allow: the agent can't add to it unasked.
+  // What Paul said to always allow, and the host's state it lives in: the agent can't add to it unasked.
   /(^|\/)always-allow\.json$/i,
+  /(^|\/)\.local\/state\/tavern-durable(\/|$)/,
 ];
 
 /**

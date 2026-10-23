@@ -12,7 +12,13 @@ export const ALWAYS_FILE = "always-allow.json";
 /** Programs that run whatever code they're given: never remembered. */
 const RUNS_CODE = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "env", "xargs", "exec", "eval", "command", "nohup", "time",
   "node", "deno", "bun", "npx", "bunx", "pnpx", "python", "python3", "ruby", "perl", "php", "lua", "osascript", "awk", "gawk", "sed",
-  "find", "ssh", "sudo", "doas", "su", "script", "watch", "parallel", "make", "just"]);
+  "find", "ssh", "sudo", "doas", "su", "script", "watch", "parallel", "make", "just",
+  // Wrappers that run another program.
+  "timeout", "nice", "stdbuf", "caffeinate", "busybox", "arch", "open", "unbuffer", "chroot", "systemd-run", "launchctl"]);
+/** Interpreters with a version on the end ("python3.12", "node22") count too. */
+const INTERPRETER = /^(python|node|ruby|perl|php|lua|bash|zsh|sh)[\d.]*$/i;
+// Package scripts ("npm test") run what package.json says, but under the "all" policy, where
+// these approvals happen, every change to package.json asks Paul, and writes are never remembered.
 
 /**
  * What "always allow" remembers for a call, or null when it can't be remembered safely. A shell
@@ -28,7 +34,7 @@ export function alwaysKey(call) {
   if (!command || command.length > 200 || /[;&|`<>$'"\\\n(){}*?\[\]~!#]/.test(command)) return null;
   const words = command.split(/\s+/);
   const program = words[0];
-  if (!/^[a-z0-9][\w.+-]*$/i.test(program) || RUNS_CODE.has(program.toLowerCase())) return null;
+  if (!/^[a-z0-9][\w.+-]*$/i.test(program) || RUNS_CODE.has(program.toLowerCase()) || INTERPRETER.test(program)) return null;
   if (words.some((word) => /^-(c|e)$|^--(eval|exec|command|config)\b|^-c\S/.test(word))) return null;
   return `bash:${words.join(" ")}`;
 }
