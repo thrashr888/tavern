@@ -12,6 +12,28 @@ enum Party {
         var partyName: String?
         var lore: [LoreLink]?
         var spellbookStars: [String]?
+        /// The Linear team Goals reads (the roster's `linearTeam`).
+        var linearTeam: String?
+        var members: [Member]?
+    }
+
+    /// A party member as Goals needs it: who they are and which Linear projects they own.
+    struct Member: Decodable, Identifiable {
+        var id: String
+        var name: String
+        var avatarColor: String?
+        var owns: [String]?
+        var partyClass: String?
+    }
+
+    /// The member an issue belongs to: its `agent:<id>` label (or assignee), else its project's owner.
+    static func member(for issue: LinearIssue) -> Member? {
+        let members = info.members ?? []
+        if let owner = issue.owner?.lowercased(), let found = members.first(where: { $0.id.lowercased() == owner || $0.name.lowercased() == owner }) {
+            return found
+        }
+        guard let project = issue.project?.lowercased() else { return nil }
+        return members.first { $0.owns?.contains { $0.lowercased() == project } == true }
     }
 
     static let info: Info = folder

@@ -84,22 +84,24 @@ final class PAPPhone: ObservableObject {
     func inbox() async throws -> [MailRow] {
         try await client.task("Show Paul's inbox on his iPhone", goal: "Read the newest inbox mail for Tavern's Mail tab") { [client] in
             let google = try await client.connection("Google", describedAs: "Gmail connection").id
-            let result = try await client.read(google, "emails_list", ["search": "in:inbox", "folder": "inbox"])
+            let result = try await client.read(google, "emails_list", ["search": "in:inbox", "folder": "Inbox"])
             return (result["records"]?.arrayValue ?? []).compactMap(MailRow.init)
         }
     }
 
-    /// Open Linear issues.
-    func issues() async throws -> [IssueRow] {
-        try await client.task("Show Linear issues on Paul's iPhone", goal: "Read open issues for Tavern's Linear tab") { [client] in
-            let linear = try await client.connection("Linear", describedAs: "Linear connection").id
-            var rows: [IssueRow] = []
-            for type in ["Started", "Unstarted", "Triage"] {
-                let result = try await client.read(linear, "issues_list", ["statusType": .string(type)])
-                rows += (result["records"]?.arrayValue ?? []).compactMap(IssueRow.init)
-            }
-            return rows
+    /// The team's Linear issues for Goals (the roster's `linearTeam`, bundled by scripts/party.sh).
+    private(set) lazy var linear: LinearSource? = Party.info.linearTeam.flatMap { $0.isEmpty ? nil : LinearSource(proxy: client, teamKey: $0) }
+
+    /// Open goals, recently updated first; cached for a couple of minutes unless `refresh`.
+    func goals(refresh: Bool = false) async throws -> [LinearIssue] {
+        guard let linear else { return [] }
+        return try await client.task("Show Linear goals on Paul's iPhone", goal: "Read open issues for Tavern's Goals tab") {
+            try await linear.openIssues(refresh: refresh)
         }
+    }
+
+    func goalDetail(_ identifier: String) async throws -> LinearIssueDetail? {
+        try await linear?.detail(identifier)
     }
 }
 
@@ -118,23 +120,6 @@ struct MailRow: Identifiable, Sendable {
         from = values?["from"]?.stringValue ?? ""
         snippet = values?["snippet"]?.stringValue ?? values?["preview"]?.stringValue ?? ""
         date = values?["date"]?.stringValue ?? ""
-    }
-}
-
-struct IssueRow: Identifiable, Sendable {
-    var id: String
-    var title: String
-    var status: String
-    var assignee: String
-    var url: URL?
-
-    init?(_ record: JSONValue) {
-        guard let id = record["id"]?.stringValue, let values = record["values"] else { return nil }
-        self.id = id
-        title = values["title"]?.stringValue ?? ""
-        status = values["status"]?.stringValue ?? ""
-        assignee = values["assignee"]?.stringValue ?? ""
-        url = record["url"]?.stringValue.flatMap(URL.init(string:))
     }
 }
 
@@ -166,7 +151,7 @@ enum WebSignIn {
 }
 
 /// "Sign in to Personal Agent Proxy" until there's a login, then the content.
-private struct NeedsPAP<Content: View>: View {
+struct NeedsPAP<Content: View>: View {
     @EnvironmentObject private var pap: PAPPhone
     let purpose: String
     @ViewBuilder var content: () -> Content
@@ -223,47 +208,6 @@ struct MailView: View {
     private func load() async {
         do {
             rows = try await pap.inbox()
-            error = nil
-        } catch {
-            self.error = PAPPhone.message(for: error, signingIn: false)
-        }
-        loaded = true
-    }
-}
-
-struct LinearView: View {
-    @EnvironmentObject private var pap: PAPPhone
-    @State private var rows: [IssueRow] = []
-    @State private var error: String?
-    @State private var loaded = false
-
-    var body: some View {
-        NeedsPAP(purpose: "Linear") {
-            List {
-                if let error { Text(error).foregroundStyle(.red).font(.footnote) }
-                ForEach(rows) { row in
-                    let label = VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(row.id).font(.caption.monospaced()).foregroundStyle(.secondary)
-                            Text(row.status).font(.caption2.weight(.semibold)).foregroundStyle(Color.tavernAccent)
-                            Spacer()
-                            if !row.assignee.isEmpty { Text(row.assignee).font(.caption).foregroundStyle(.secondary) }
-                        }
-                        Text(row.title).font(.subheadline).lineLimit(2)
-                    }
-                    if let url = row.url { Link(destination: url) { label.foregroundStyle(.primary) } } else { label }
-                }
-            }
-            .overlay { if loaded && rows.isEmpty && error == nil { ContentUnavailableView("No open issues", systemImage: "checkmark.circle") } }
-            .refreshable { await load() }
-            .task { if !loaded { await load() } }
-        }
-        .navigationTitle("Linear")
-    }
-
-    private func load() async {
-        do {
-            rows = try await pap.issues()
             error = nil
         } catch {
             self.error = PAPPhone.message(for: error, signingIn: false)

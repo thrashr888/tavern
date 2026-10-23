@@ -17,16 +17,16 @@ struct AgentListView: View {
         }
         .overlay {
             if model.agents.isEmpty {
-                ContentUnavailableView("No agents yet", systemImage: "person.3",
-                                       description: Text("Add an agent's host and port, such as flint.your-tailnet.ts.net and 19011."))
+                ContentUnavailableView("No one in the party yet", systemImage: "person.3",
+                                       description: Text("Tap + to make an agent that lives on this iPhone, or to add a host's agent."))
             }
         }
-        .navigationTitle("Agents")
+        .navigationTitle("Party")
         .refreshable {
             for agent in model.agents { await model.session(for: agent)?.reconnectNow() }
         }
         .toolbar {
-            Button { adding = true } label: { Label("Add agent", systemImage: "plus") }
+            Button { adding = true } label: { Label("Add to the party", systemImage: "plus") }
         }
         .sheet(isPresented: $adding) { AddAgentView().environmentObject(model) }
     }
@@ -85,35 +85,74 @@ struct Avatar: View {
     }
 }
 
-/// A host and port for an agent's durable host.
+/// A new agent on this iPhone (it sets itself up: memory, tools, a hello), or a host's agent
+/// by its durable host's address.
 private struct AddAgentView: View {
+    enum Kind: String, CaseIterable {
+        case phone = "On this iPhone", host = "On a host"
+    }
+
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
+    @State private var kind = Kind.phone
     @State private var name = ""
+    @State private var role = ""
     @State private var host = ""
     @State private var port = "19011"
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+    private var taken: Bool { model.agents.contains { $0.id == trimmedName.lowercased() } }
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Name", text: $name)
-                TextField("Host", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField("Port", text: $port).keyboardType(.numberPad)
-                Text("The agent's durable host, reached over your tailnet. Tavern adds no access of its own.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                Picker("Where it runs", selection: $kind) {
+                    ForEach(Kind.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+                Section {
+                    TextField("Name", text: $name)
+                    if kind == .phone {
+                        TextField("What it's for (optional)", text: $role, axis: .vertical).lineLimit(2...4)
+                    } else {
+                        TextField("Host", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        TextField("Port", text: $port).keyboardType(.numberPad)
+                    }
+                } footer: {
+                    if taken {
+                        Text("Someone in the party already has that name.").foregroundStyle(.red)
+                    } else if kind == .phone {
+                        Text("Runs on Apple's on-device model, so nothing leaves the phone except what its tools read. It can see where the phone is and its battery, read your inbox and Linear goals, and keeps its own memory on the phone. It sets itself up and says hello.")
+                    } else {
+                        Text("The agent's durable host, reached over your tailnet. Tavern adds no access of its own.")
+                    }
+                }
             }
-            .navigationTitle("Add agent")
+            .navigationTitle("Add to the party")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        let trimmed = name.trimmingCharacters(in: .whitespaces)
-                        model.add(PhoneAgent(id: trimmed.lowercased(), name: trimmed, host: host.trimmingCharacters(in: .whitespaces), port: UInt16(port) ?? 19011))
+                    Button(kind == .phone ? "Create" : "Add") {
+                        switch kind {
+                        case .phone:
+                            let job = role.trimmingCharacters(in: .whitespacesAndNewlines)
+                            model.add(.onPhone(name: trimmedName, role: job.isEmpty ? nil : job))
+                        case .host:
+                            model.add(PhoneAgent(id: trimmedName.lowercased(), name: trimmedName, host: host.trimmingCharacters(in: .whitespaces), port: UInt16(port) ?? 19011))
+                        }
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || host.trimmingCharacters(in: .whitespaces).isEmpty || UInt16(port) == nil)
+                    .disabled(!canAdd)
                 }
             }
         }
+    }
+
+    private var canAdd: Bool {
+        guard !trimmedName.isEmpty, !taken else { return false }
+        return kind == .phone || (!host.trimmingCharacters(in: .whitespaces).isEmpty && UInt16(port) != nil)
     }
 }

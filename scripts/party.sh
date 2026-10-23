@@ -14,7 +14,8 @@ done
 for file in "$tavern_home"/portrait.{jpg,jpeg,png,heic}; do
   [ -f "$file" ] && { sips -s format jpeg -Z 1600 "$file" --out "$party/portrait.jpg" >/dev/null; break; }
 done
-[ -f "$roster" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); json.dump({k: r[k] for k in ("partyName", "lore", "spellbookStars") if k in r}, open(sys.argv[2], "w"))' "$roster" "$party/party.json"
+# Goals on the phone needs the Linear team, and each member's name, color and owned projects.
+[ -f "$roster" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); p={k: r[k] for k in ("partyName", "lore", "spellbookStars", "linearTeam") if k in r}; p["members"]=[{k: m[k] for k in ("id", "name", "avatarColor", "owns", "partyClass") if k in m} for m in r.get("members", [])]; json.dump(p, open(sys.argv[2], "w"))' "$roster" "$party/party.json"
 if [ -f "$tavern_home/spellbook/index.json" ]; then
   mkdir -p "$party/spellbook"
   (cd "$tavern_home/spellbook" && cp index.json "$OLDPWD/$party/spellbook/" && find skills -name SKILL.md -exec rsync -R {} "$OLDPWD/$party/spellbook/" \;)

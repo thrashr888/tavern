@@ -26,6 +26,9 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: dev.thrashr888.tavern.phone
             CFBundleURLSchemes: [dev.thrashr888.tavern.phone]
+        # The phone agents' heartbeat (BGAppRefreshTask): checks mail while the app is closed.
+        BGTaskSchedulerPermittedIdentifiers: [dev.thrashr888.tavern.phone.heartbeat]
+        UIBackgroundModes: [fetch]
     dependencies:
       - package: Tavern
         product: TavernCore

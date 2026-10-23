@@ -501,8 +501,10 @@ private struct AgentInfoSheet: View {
                 }
                 Section("How it runs") {
                     LabeledContent("Model", value: session.config.model?.shortName ?? "Not reported")
-                    LabeledContent("Endpoint", value: agent.endpoint)
-                    LabeledContent("Host", value: session.config.durable ? "Durable host" : "Pi RPC")
+                    LabeledContent(agent.isLocal ? "Runs on" : "Endpoint", value: agent.endpoint)
+                    if !agent.isLocal {
+                        LabeledContent("Host", value: session.config.durable ? "Durable host" : "Pi RPC")
+                    }
                     if let usage = session.config.usage {
                         LabeledContent("Spent", value: usage.cost.formatted(.currency(code: "USD")))
                     }
@@ -532,7 +534,33 @@ private struct AgentInfoSheet: View {
                         }
                     }
                 }
+                if agent.isLocal, let runtime = LocalAgentRuntime.runtime(id: agent.id) {
+                    Section {
+                        Picker("Check mail", selection: Binding(get: { runtime.everyMinutes }, set: { minutes in
+                            runtime.setHeartbeat(minutes: minutes)
+                            Task { try? await session.sync() }
+                        })) {
+                            Text("Off").tag(0)
+                            ForEach([15, 30, 60, 120, 240], id: \.self) { Text($0 < 60 ? "Every \($0) min" : "Every \($0 / 60) h").tag($0) }
+                        }
+                        NavigationLink("What to do on a beat") { HeartbeatTaskEditor(runtime: runtime) }
+                    } header: {
+                        Text("Heartbeat")
+                    } footer: {
+                        Text("New mail wakes \(agent.name) with HEARTBEAT.md. While Tavern is open it checks on time; closed, iOS decides when, often later.")
+                    }
+                    Section {
+                        if let role = agent.role { Text(role) }
+                        let memory = LocalAgentRuntime.memory(of: agent)
+                        Text(memory.isEmpty ? "Nothing yet." : memory).font(.footnote.monospaced()).foregroundStyle(.secondary)
+                    } header: {
+                        Text("Memory")
+                    } footer: {
+                        Text("Kept on this iPhone. Tell \(agent.name) to remember something and it adds a line.")
+                    }
+                }
                 Section {
+                    if !agent.isLocal || session.config.heartbeat != nil {
                     Button {
                         checking = true
                         Task {
@@ -542,7 +570,10 @@ private struct AgentInfoSheet: View {
                     } label: { Label(checking ? "Checking…" : "Run heartbeat check", systemImage: "waveform.path.ecg") }
                         .disabled(checking)
                     if let checkResult { Text(checkResult).font(.footnote).foregroundStyle(.secondary) }
-                    Button { Task { await session.compact() } } label: { Label("Compact the context", systemImage: "rectangle.compress.vertical") }
+                    }
+                    if !agent.isLocal {
+                        Button { Task { await session.compact() } } label: { Label("Compact the context", systemImage: "rectangle.compress.vertical") }
+                    }
                     Button { Task { await session.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     Button(role: .destructive) { Task { await session.abort() } } label: { Label("Stop the current turn", systemImage: "stop.circle") }
                         .disabled(!session.isWorking)
@@ -553,5 +584,21 @@ private struct AgentInfoSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// A phone agent's HEARTBEAT.md: what it does when new mail wakes it. Saved on the way out.
+private struct HeartbeatTaskEditor: View {
+    let runtime: LocalAgentRuntime
+    @State private var text = ""
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .navigationTitle("HEARTBEAT.md")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear { text = runtime.heartbeatTask }
+            .onDisappear { runtime.heartbeatTask = text }
     }
 }
