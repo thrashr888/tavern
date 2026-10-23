@@ -46,6 +46,8 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Tavern talks to your Pi agents' hosts on your network.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Your agents can ask where you are; you approve each time.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Tavern listens while you dictate a message.
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: Your phone agents can read your calendar when you ask them about your day.
+        INFOPLIST_KEY_NSRemindersFullAccessUsageDescription: Your phone agents can read your reminders and add new ones when you ask.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Tavern turns your dictation into text, on the iPhone when it can.
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic

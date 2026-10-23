@@ -483,6 +483,8 @@ private struct AgentInfoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var checkResult: String?
     @State private var checking = false
+    @State private var confirmRemove = false
+    @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
         NavigationStack {
@@ -578,10 +580,21 @@ private struct AgentInfoSheet: View {
                     Button(role: .destructive) { Task { await session.abort() } } label: { Label("Stop the current turn", systemImage: "stop.circle") }
                         .disabled(!session.isWorking)
                 }
+                Section {
+                    Button(role: .destructive) { confirmRemove = true } label: { Label("Remove from the party", systemImage: "trash") }
+                } footer: {
+                    Text(agent.isLocal ? "Deletes \(agent.name)'s thread and memory on this iPhone." : "Only takes \(agent.name) off this iPhone; the agent keeps running on its host.")
+                }
             }
             .navigationTitle(agent.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .confirmationDialog("Remove \(agent.name) from the party?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) {
+                    dismiss()
+                    model.remove(agent)
+                }
+            }
         }
         .presentationDetents([.medium, .large])
     }

@@ -17,6 +17,11 @@ final class LocalAgentRuntime {
         var sensor: @MainActor (String) async throws -> JSONValue
         var inbox: @MainActor () async throws -> [MailRow]
         var goals: @MainActor () async throws -> [LinearIssue]
+        /// iCloud Mail's inbox over IMAP, once Paul sets it up on the Mail tab.
+        var icloud: @MainActor () async throws -> [MailRow]
+        var calendar: @MainActor (_ days: Int) async throws -> String
+        var reminders: @MainActor () async throws -> String
+        var addReminder: @MainActor (_ title: String, _ due: String?) async throws -> String
     }
 
     let agent: PhoneAgent
@@ -66,6 +71,7 @@ final class LocalAgentRuntime {
         setUpHeartbeat()
         let state = (try? Data(contentsOf: heartbeatStateURL)).flatMap { try? JSONValue.decode($0) }
         seen = state?["seen"]?.arrayValue.map { $0.compactMap(\.stringValue) }
+        noted = state?["noted"]?.arrayValue?.compactMap(\.stringValue) ?? (seen == nil ? [] : ["Gmail"])
         lastCheck = state?["lastCheck"]?.stringValue.flatMap(ISO8601DateFormatter().date(from:))
         lastBeat = state?["lastBeat"]?.stringValue.flatMap(ISO8601DateFormatter().date(from:))
     }
@@ -221,7 +227,7 @@ final class LocalAgentRuntime {
         }
         return """
         You are \(agent.name), an agent in Paul's party (his group of AI agents, named like a D&D party). You live on Paul's iPhone and talk with him in Tavern.\(agent.role.map { $0.isEmpty ? "" : " Your job: \($0)" } ?? "")
-        You are talking with Paul himself, so call him "you". Be brief and warm. Use your tools when they help instead of guessing: phone_location, phone_battery, mail_inbox, linear_goals, remember and recall. When Paul tells you something worth keeping (a preference, a fact about him, a decision), call remember. You can't send mail or change Linear; say so if asked.
+        You are talking with Paul himself, so call him "you". Be brief and warm. Use your tools when they help instead of guessing: phone_location, phone_battery, mail_inbox (Gmail), icloud_mail, calendar_events, reminders_list, reminder_add, linear_goals, remember and recall. When Paul tells you something worth keeping (a preference, a fact about him, a decision), call remember. You can't send mail, change his calendar or change Linear; say so if asked.
         It is \(Date().formatted(date: .complete, time: .shortened)).
 
         Your memory:
@@ -258,6 +264,8 @@ final class LocalAgentRuntime {
     private var heartbeatStateURL: URL { folder.appendingPathComponent(".heartbeat-state.json") }
     /// Mail ids already seen; nil until the first check, which only takes note of the inbox.
     private var seen: [String]?
+    /// Mailboxes whose first check has happened.
+    private var noted: [String] = []
     private var lastCheck: Date?
     private var lastBeat: Date?
     private var lastFound = 0
@@ -318,16 +326,25 @@ final class LocalAgentRuntime {
     func beat(dryRun: Bool = false) async -> JSONValue {
         var found: [MailRow] = []
         var errors: [String] = []
-        do {
-            let rows = try await reach.inbox()
-            found = rows.filter { !(seen ?? []).contains($0.id) }
-            if !dryRun && turn == nil {
-                // The first check takes note of what's already there instead of waking on all of it.
-                if seen == nil { found = [] }
-                seen = Array(((seen ?? []) + rows.map(\.id)).suffix(500))
+        var sources: [(name: String, read: @MainActor () async throws -> [MailRow])] = [("Gmail", reach.inbox)]
+        if ICloudMail.isSetUp { sources.append(("iCloud", reach.icloud)) }
+        for source in sources {
+            do {
+                let rows = try await source.read()
+                var new = rows.filter { !(seen ?? []).contains($0.id) }
+                if !dryRun && turn == nil {
+                    // A mailbox's first check takes note of what's already there instead of
+                    // waking on all of it.
+                    if !noted.contains(source.name) {
+                        new = []
+                        noted.append(source.name)
+                    }
+                    seen = Array(((seen ?? []) + rows.map(\.id)).suffix(1000))
+                }
+                found += new
+            } catch {
+                errors.append("\(source.name): " + ((error as? LocalizedError)?.errorDescription ?? "\(error)"))
             }
-        } catch {
-            errors.append((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
         let result: JSONValue = ["found": .array(found.map { ["check": "mail", "summary": .string(Self.summary($0))] }),
                                  "errors": .array(errors.map { ["check": "mail", "error": .string($0)] })]
@@ -357,7 +374,7 @@ final class LocalAgentRuntime {
 
     private func saveHeartbeatState() {
         let iso = ISO8601DateFormatter()
-        var state: [String: JSONValue] = ["seen": .array((seen ?? []).map(JSONValue.string))]
+        var state: [String: JSONValue] = ["seen": .array((seen ?? []).map(JSONValue.string)), "noted": .array(noted.map(JSONValue.string))]
         if let lastCheck { state["lastCheck"] = .string(iso.string(from: lastCheck)) }
         if let lastBeat { state["lastBeat"] = .string(iso.string(from: lastBeat)) }
         try? JSONValue.object(state).encoded().write(to: heartbeatStateURL, options: .atomic)
@@ -492,6 +509,21 @@ enum LocalModel {
                 let rows = try await reach.inbox()
                 return rows.isEmpty ? "The inbox is empty." : rows.prefix(15).map { "- \($0.from): \($0.subject) (\($0.date)) \($0.snippet.prefix(120))" }.joined(separator: "\n")
             },
+            PhoneTool<NoArguments>(name: "icloud_mail", description: "The newest mail in Paul's iCloud inbox: sender, subject and date. Read-only.", trace: trace) { _ in
+                let rows = try await reach.icloud()
+                return rows.isEmpty ? "The iCloud inbox is empty." : rows.map { "- \($0.from): \($0.subject) (\($0.date))" }.joined(separator: "\n")
+            },
+            PhoneTool<DaysArguments>(name: "calendar_events", description: "Paul's calendar events from today through the next few days, across all his calendars.", trace: trace,
+                                     arguments: { ["days": .number(Double($0.days))] }) { arguments in
+                try await reach.calendar(arguments.days)
+            },
+            PhoneTool<NoArguments>(name: "reminders_list", description: "Paul's open reminders, soonest due first.", trace: trace) { _ in
+                try await reach.reminders()
+            },
+            PhoneTool<ReminderArguments>(name: "reminder_add", description: "Adds a reminder to Paul's default Reminders list, with an optional due time.", trace: trace,
+                                         arguments: { ["title": .string($0.title), "due": .string($0.due)] }) { arguments in
+                try await reach.addReminder(arguments.title, arguments.due.isEmpty ? nil : arguments.due)
+            },
             PhoneTool<NoArguments>(name: "linear_goals", description: "Paul's open Linear goals (issues): ID, status, title, project and who owns it. Read-only.", trace: trace) { _ in
                 let issues = try await reach.goals()
                 return issues.isEmpty ? "No open goals." : issues.prefix(30).map { issue in
@@ -509,7 +541,7 @@ enum LocalModel {
             },
         ]
         guard heartbeat else { return all }
-        return all.filter { ["mail_inbox", "linear_goals", "recall", "phone_battery"].contains($0.name) }
+        return all.filter { ["mail_inbox", "icloud_mail", "calendar_events", "reminders_list", "linear_goals", "recall", "phone_battery"].contains($0.name) }
     }
 
     private static func describe(_ value: JSONValue) -> String {
@@ -523,6 +555,17 @@ enum LocalModel {
 @available(iOS 26.0, *)
 @Generable struct NoteArguments {
     @Guide(description: "The fact to remember, as one short line") var note: String
+}
+
+@available(iOS 26.0, *)
+@Generable struct DaysArguments {
+    @Guide(description: "How many days ahead to look, from 1 (today) to 31", .range(1...31)) var days: Int
+}
+
+@available(iOS 26.0, *)
+@Generable struct ReminderArguments {
+    @Guide(description: "What to be reminded of") var title: String
+    @Guide(description: "When it's due, as yyyy-MM-dd HH:mm, or empty for no due time") var due: String
 }
 
 @available(iOS 26.0, *)

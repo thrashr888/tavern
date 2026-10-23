@@ -11,6 +11,9 @@ struct AgentListView: View {
             ForEach(model.agents) { agent in
                 if let session = model.session(for: agent) {
                     NavigationLink(value: agent.id) { AgentRow(agent: agent, session: session) }
+                        .contextMenu {
+                            Button(role: .destructive) { model.remove(agent) } label: { Label("Remove from the party", systemImage: "trash") }
+                        }
                 }
             }
             .onDelete { model.remove(at: $0) }
@@ -112,6 +115,28 @@ private struct AddAgentView: View {
                 .pickerStyle(.segmented)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
+                if kind == .host, !model.missingPartyHosts.isEmpty {
+                    Section {
+                        ForEach(model.missingPartyHosts, id: \.id) { host in
+                            Button {
+                                model.add(PhoneAgent(id: host.id, name: host.name, host: host.host, port: host.port))
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Avatar(name: host.name, size: 32)
+                                    VStack(alignment: .leading) {
+                                        Text(host.name).foregroundStyle(.primary)
+                                        Text("\(host.host):\(host.port)").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("From your party")
+                    } footer: {
+                        Text("Reached by name over your tailnet. Or add another host below.")
+                    }
+                }
                 Section {
                     TextField("Name", text: $name)
                     if kind == .phone {

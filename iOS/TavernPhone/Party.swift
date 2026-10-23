@@ -15,6 +15,15 @@ enum Party {
         /// The Linear team Goals reads (the roster's `linearTeam`).
         var linearTeam: String?
         var members: [Member]?
+        /// The Pi agents' durable hosts by tailnet name (scripts/phone-hosts.py).
+        var hosts: [Host]?
+    }
+
+    struct Host: Decodable {
+        var id: String
+        var name: String
+        var host: String
+        var port: UInt16
     }
 
     /// A party member as Goals needs it: who they are and which Linear projects they own.

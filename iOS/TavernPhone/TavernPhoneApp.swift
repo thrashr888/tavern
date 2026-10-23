@@ -113,11 +113,14 @@ final class PhoneModel: ObservableObject {
     private let store: EventStore?
     /// Location and battery, lent to every agent while the app is connected.
     private let sensors = PhoneSensors()
+    private let calendar = PhoneCalendar()
     /// Mail and Linear for the phone's own agents, through the app's PAP login.
     weak var pap: PAPPhone?
     private static let key = "tavern.phone.agents"
     /// Set once the phone has made its first agent of its own, so removing it sticks.
     private static let setUpKey = "tavern.phone.localAgentSetUp"
+    /// Party hosts Paul removed, so the next launch doesn't add them back.
+    private static let removedKey = "tavern.phone.removedHosts"
     nonisolated static let heartbeatTask = "dev.thrashr888.tavern.phone.heartbeat"
     private var heartbeatTimer: AnyCancellable?
 
@@ -130,6 +133,8 @@ final class PhoneModel: ObservableObject {
         if let seed = ProcessInfo.processInfo.environment["TAVERN_AGENTS"], !seed.isEmpty {
             agents = Self.parse(seed)
             save()
+        } else {
+            addPartyHosts()
         }
         #if !targetEnvironment(simulator)
         // On a real iPhone, loopback is the phone itself: those entries (the Simulator's demo
@@ -148,6 +153,26 @@ final class PhoneModel: ObservableObject {
         // While the app is open, a due beat runs within a minute.
         heartbeatTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
             .sink { [weak self] _ in Task { await self?.beat() } }
+    }
+
+    /// The party's hosts from the build (their tailnet names), added or brought up to date, except
+    /// ones Paul removed.
+    private func addPartyHosts() {
+        let removed = Set(UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? [])
+        for host in Party.info.hosts ?? [] where !removed.contains(host.id) {
+            let agent = PhoneAgent(id: host.id, name: host.name, host: host.host, port: host.port)
+            if let index = agents.firstIndex(where: { $0.id == host.id }) {
+                if !agents[index].isLocal { agents[index] = agent }
+            } else {
+                agents.append(agent)
+            }
+        }
+        save()
+    }
+
+    /// Party hosts not on the phone (removed, or new since), for Add to the party.
+    var missingPartyHosts: [Party.Host] {
+        (Party.info.hosts ?? []).filter { host in !agents.contains { $0.id == host.id } }
     }
 
     /// Runs the phone agents' due heartbeats and waits for any turn they start.
@@ -204,10 +229,17 @@ final class PhoneModel: ObservableObject {
             goals: { [weak self] in
                 guard let pap = self?.pap, pap.signedIn else { throw PhoneSensors.Failure(errorDescription: "Sign in to Personal Agent Proxy on the Goals tab first.") }
                 return try await pap.goals()
-            })
+            },
+            icloud: { try await ICloudMail.inbox() },
+            calendar: { [calendar] days in try await calendar.events(days: days) },
+            reminders: { [calendar] in try await calendar.reminders() },
+            addReminder: { [calendar] title, due in try await calendar.addReminder(title: title, due: due) })
     }
 
     func add(_ agent: PhoneAgent) {
+        var removed = UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? []
+        removed.removeAll { $0 == agent.id }
+        UserDefaults.standard.set(removed, forKey: Self.removedKey)
         if let old = sessions.removeValue(forKey: agent.id) { Task { await old.disconnect() } }
         agents.removeAll { $0.id == agent.id }
         agents.append(agent)
@@ -215,9 +247,15 @@ final class PhoneModel: ObservableObject {
         start(agent)
     }
 
+    /// Takes an agent out of the party whatever state it's in (connected, reconnecting or failed).
+    func remove(_ agent: PhoneAgent) {
+        if let index = agents.firstIndex(where: { $0.id == agent.id }) { remove(at: IndexSet(integer: index)) }
+    }
+
     func remove(at offsets: IndexSet) {
         for index in offsets {
             let agent = agents[index]
+            UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? []) + [agent.id], forKey: Self.removedKey)
             watchers.removeValue(forKey: agent.id)
             if let session = sessions.removeValue(forKey: agent.id) { Task { await session.disconnect() } }
             if agent.isLocal { LocalAgentRuntime.forget(agent) }

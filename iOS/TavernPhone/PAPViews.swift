@@ -112,6 +112,14 @@ struct MailRow: Identifiable, Sendable {
     var snippet: String
     var date: String
 
+    init(id: String, subject: String, from: String, snippet: String, date: String) {
+        self.id = id
+        self.subject = subject
+        self.from = from
+        self.snippet = snippet
+        self.date = date
+    }
+
     init?(_ record: JSONValue) {
         guard let id = record["id"]?.stringValue, !id.hasPrefix("draft-") else { return nil }
         let values = record["values"]
@@ -175,43 +183,126 @@ struct NeedsPAP<Content: View>: View {
     }
 }
 
+/// Gmail through PAP, and iCloud Mail over IMAP with an app-specific password.
 struct MailView: View {
+    enum Box: String, CaseIterable { case gmail = "Gmail", icloud = "iCloud" }
+
     @EnvironmentObject private var pap: PAPPhone
+    @AppStorage("tavern.mail.box") private var box: Box = .gmail
+    @State private var icloudSetUp = ICloudMail.isSetUp
+
+    var body: some View {
+        Group {
+            switch box {
+            case .gmail:
+                NeedsPAP(purpose: "your mail") { MailList(load: { try await pap.inbox() }) }
+            case .icloud:
+                if icloudSetUp {
+                    MailList(load: { try await ICloudMail.inbox(limit: 40) })
+                } else {
+                    ICloudMailSetup { icloudSetUp = true }
+                }
+            }
+        }
+        .navigationTitle("Mail")
+        .safeAreaInset(edge: .top) {
+            Picker("Mailbox", selection: $box) { ForEach(Box.allCases, id: \.self) { Text($0.rawValue) } }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+                .background(.bar)
+        }
+        .toolbar {
+            if box == .gmail, pap.signedIn { Button("Sign out") { Task { await pap.signOut() } } }
+            if box == .icloud, icloudSetUp {
+                Button("Remove") {
+                    ICloudMail.forget()
+                    icloudSetUp = false
+                }
+            }
+        }
+    }
+}
+
+/// Newest first, with pull to refresh.
+private struct MailList: View {
+    let load: () async throws -> [MailRow]
     @State private var rows: [MailRow] = []
     @State private var error: String?
     @State private var loaded = false
 
     var body: some View {
-        NeedsPAP(purpose: "your mail") {
-            List {
-                if let error { Text(error).foregroundStyle(.red).font(.footnote) }
-                ForEach(rows) { row in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text(row.from).font(.subheadline.weight(.semibold)).lineLimit(1)
-                            Spacer()
-                            Text(row.date).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Text(row.subject).font(.subheadline).lineLimit(2)
-                        if !row.snippet.isEmpty { Text(row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+        List {
+            if let error { Text(error).foregroundStyle(.red).font(.footnote) }
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(row.from).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Spacer()
+                        Text(row.date).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    Text(row.subject).font(.subheadline).lineLimit(2)
+                    if !row.snippet.isEmpty { Text(row.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                 }
             }
-            .overlay { if loaded && rows.isEmpty && error == nil { ContentUnavailableView("Inbox zero", systemImage: "tray") } }
-            .refreshable { await load() }
-            .task { if !loaded { await load() } }
         }
-        .navigationTitle("Mail")
-        .toolbar { if pap.signedIn { Button("Sign out") { Task { await pap.signOut() } } } }
+        .overlay {
+            if !loaded { ProgressView() } else if rows.isEmpty && error == nil { ContentUnavailableView("Inbox zero", systemImage: "tray") }
+        }
+        .refreshable { await reload() }
+        .task { if !loaded { await reload() } }
     }
 
-    private func load() async {
+    private func reload() async {
         do {
-            rows = try await pap.inbox()
+            rows = try await load()
             error = nil
         } catch {
             self.error = PAPPhone.message(for: error, signingIn: false)
         }
         loaded = true
+    }
+}
+
+/// The iCloud address and an app-specific password, which Paul makes at account.apple.com.
+private struct ICloudMailSetup: View {
+    let done: () -> Void
+    @State private var address = ""
+    @State private var password = ""
+    @State private var checking = false
+    @State private var error: String?
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("iCloud address", text: $address)
+                    .textContentType(.emailAddress).keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("App-specific password", text: $password)
+            } header: {
+                Text("iCloud Mail")
+            } footer: {
+                Text("iOS doesn't let apps read Mail.app, so Tavern signs in to iCloud Mail itself, read-only. Make an app-specific password at account.apple.com > Sign-In and Security > App-Specific Passwords. It stays in this iPhone's Keychain.")
+            }
+            if let error { Text(error).foregroundStyle(.red).font(.footnote) }
+            Button(checking ? "Checking…" : "Connect") {
+                checking = true
+                Task {
+                    do {
+                        try ICloudMail.save(address: address, password: password)
+                        _ = try await ICloudMail.inbox(limit: 1)
+                        done()
+                    } catch {
+                        ICloudMail.forget()
+                        self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                    checking = false
+                }
+            }
+            .disabled(checking || !address.contains("@") || password.count < 16)
+            if let url = URL(string: "https://account.apple.com/account/manage") {
+                Link("Open account.apple.com", destination: url)
+            }
+        }
     }
 }
