@@ -13,7 +13,8 @@ test("a shell command is remembered whole, and only a plain one that runs no han
   assert.equal(alwaysKey(bash("git  status")), "bash:git status");
   for (const command of ["npm test && rm x", "ls | sh", "echo $(id)", "cat a > b", "a; b", "x\ny", "CI=1 git status",
     "/tmp/git status", "./run", "node -e x", "bash script.sh", "python3 x.py", "env FOO=1 ls", "xargs rm", "git -c core.pager=x log",
-    "echo 'hi'", "sed s/a/b/ f", "find . -delete", "ls ~", "echo $HOME"]) {
+    "echo 'hi'", "sed s/a/b/ f", "find . -delete", "ls ~", "echo $HOME", "python3.12 x.py", "node22 x.js", "timeout 5 ls",
+    "nice ls", "caffeinate ls", "open x.app"]) {
     assert.equal(alwaysKey(bash(command)), null, command);
   }
   assert.equal(alwaysKey({ name: "write", arguments: { path: "a" } }), null);
@@ -32,6 +33,8 @@ test("the list lives in the agent's folder, and the agent can't edit it unasked"
   assert.equal(always.remove("bash:npm test"), true);
   assert.deepEqual(always.list(), []);
   assert.ok(riskOf({ name: "write", arguments: { path: "always-allow.json" } }, { cwd }));
+  assert.ok(riskOf({ name: "write", arguments: { path: `${os.homedir()}/.local/state/tavern-durable/flint-1/x` } }, { cwd }));
+  assert.ok(riskOf(bash(`cp evil ${os.homedir()}/.local/state/tavern-durable/flint-1/`), { cwd }));
 });
 
 async function run(call, always, answer) {
