@@ -9,18 +9,20 @@ import { approvalExtension, riskOf } from "../approvals.mjs";
 const bash = (command) => ({ name: "bash", arguments: { command } });
 
 test("a shell command is remembered whole, and only a plain one that runs no handed-in code", () => {
-  assert.equal(alwaysKey(bash("npm test")), "bash:npm test");
+  assert.equal(alwaysKey(bash("swift test")), "bash:swift test");
   assert.equal(alwaysKey(bash("git  status")), "bash:git status");
+  assert.equal(alwaysKey(bash("gh pr list")), "bash:gh pr list");
   for (const command of ["npm test && rm x", "ls | sh", "echo $(id)", "cat a > b", "a; b", "x\ny", "CI=1 git status",
     "/tmp/git status", "./run", "node -e x", "bash script.sh", "python3 x.py", "env FOO=1 ls", "xargs rm", "git -c core.pager=x log",
     "echo 'hi'", "sed s/a/b/ f", "find . -delete", "ls ~", "echo $HOME", "python3.12 x.py", "node22 x.js", "timeout 5 ls",
-    "nice ls", "caffeinate ls", "open x.app"]) {
+    "nice ls", "caffeinate ls", "open x.app", "npm test", "npm exec x", "git config core.pager x", "gh pr merge 1",
+    "git -C /tmp status", "setsid ls", "uvx ruff"]) {
     assert.equal(alwaysKey(bash(command)), null, command);
   }
   assert.equal(alwaysKey({ name: "write", arguments: { path: "a" } }), null);
   assert.equal(alwaysKey({ name: "edit", arguments: { path: "a" } }), null);
   assert.equal(alwaysKey({ name: "phone_location" }), "phone_location");
-  assert.equal(alwaysLabel("bash:npm test"), "Always allow `npm test`");
+  assert.equal(alwaysLabel("bash:git status"), "Always allow `git status`");
   assert.equal(alwaysLabel("pap__run"), "Always allow pap__run");
 });
 
@@ -48,14 +50,14 @@ async function run(call, always, answer) {
 
 test("always allow skips the question next time; hard rules still ask", async () => {
   const always = new AlwaysAllow(fs.mkdtempSync(path.join(os.tmpdir(), "always-")));
-  let r = await run(bash("npm test"), always, { allow: true, always: true });
-  assert.equal(r.asked[0].always, "Always allow `npm test`");
-  assert.deepEqual(always.list(), ["bash:npm test"]);
-  r = await run(bash("npm test"), always, { allow: false });
+  let r = await run(bash("swift test"), always, { allow: true, always: true });
+  assert.equal(r.asked[0].always, "Always allow `swift test`");
+  assert.deepEqual(always.list(), ["bash:swift test"]);
+  r = await run(bash("swift test"), always, { allow: false });
   assert.equal(r.asked.length, 0);
-  r = await run(bash("npm run build"), always, { allow: false });
+  r = await run(bash("swift build"), always, { allow: false });
   assert.equal(r.asked.length, 1, "a different command still asks");
-  r = await run(bash("npm test"), always, { allow: false });
+  r = await run(bash("swift test"), always, { allow: false });
   assert.equal(r.result, undefined);
   r = await run(bash("rm -rf node_modules"), new AlwaysAllow(fs.mkdtempSync(path.join(os.tmpdir(), "always-"))), { allow: true, always: true });
   assert.equal(r.asked[0].always, undefined, "a hard rule offers no always");

@@ -1,31 +1,40 @@
 // "Always allow": tools Paul has told an agent to run without asking again, kept in the host's
-// state next to the session (not the agent's folder), in a file the approvals treat as a secret,
-// so the agent can't change it without asking. A shell command is remembered as its exact words,
-// anything else by the tool's name. Only calls the approvals call soft are ever remembered or
-// skipped: the hard rules (deletes, root, secrets, force-push) always ask.
+// state (not the agent's folder), in a place the approvals treat as a secret, so the agent can't
+// change it without asking. A shell command is remembered as its exact words, and only for a
+// known-safe program; anything else by the tool's name. Only calls the approvals call soft are
+// ever remembered or skipped: the hard rules (deletes, root, secrets, force-push) always ask.
 
 import fs from "node:fs";
 import path from "node:path";
 
 export const ALWAYS_FILE = "always-allow.json";
 
-/** Programs that run whatever code they're given: never remembered. */
-const RUNS_CODE = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "env", "xargs", "exec", "eval", "command", "nohup", "time",
-  "node", "deno", "bun", "npx", "bunx", "pnpx", "python", "python3", "ruby", "perl", "php", "lua", "osascript", "awk", "gawk", "sed",
-  "find", "ssh", "sudo", "doas", "su", "script", "watch", "parallel", "make", "just",
-  // Wrappers that run another program.
-  "timeout", "nice", "stdbuf", "caffeinate", "busybox", "arch", "open", "unbuffer", "chroot", "systemd-run", "launchctl"]);
-/** Interpreters with a version on the end ("python3.12", "node22") count too. */
-const INTERPRETER = /^(python|node|ruby|perl|php|lua|bash|zsh|sh)[\d.]*$/i;
-// Package scripts ("npm test") run what package.json says, but under the "all" policy, where
-// these approvals happen, every change to package.json asks Paul, and writes are never remembered.
+/**
+ * The programs (and, where it matters, subcommands) whose exact commands may be remembered: ones
+ * that read, build or test without running code the agent hands them. Everything else, such as
+ * interpreters, wrappers and package-script runners (npm test runs whatever package.json says),
+ * asks every time.
+ */
+const SAFE = {
+  ls: true, cat: true, head: true, tail: true, wc: true, pwd: true, date: true, uname: true, which: true, file: true,
+  stat: true, du: true, df: true, tree: true, rg: true, grep: true, echo: true, diff: true, sort: true, uniq: true,
+  git: ["status", "log", "diff", "show", "branch", "fetch", "pull", "add", "commit", "stash", "switch", "remote", "rev-parse", "blame"],
+  gh: ["pr", "issue", "run", "repo", "release"],
+  swift: ["build", "test"],
+  cargo: ["build", "test", "check", "clippy", "fmt"],
+  go: ["build", "test", "vet"],
+  docker: ["ps", "images", "logs", "inspect"],
+  kubectl: ["get", "describe", "logs"],
+};
+/** gh subcommands that only read. */
+const GH_READS = new Set(["list", "view", "status", "diff", "checks"]);
 
 /**
  * What "always allow" remembers for a call, or null when it can't be remembered safely. A shell
- * command is remembered whole, as its words ("npm test", "git status"): one simple command with a
- * bare program name, no variables, quotes, substitutions or redirects, and not an interpreter or
- * anything else that runs code it's handed. File writes and edits are never remembered (each one
- * goes somewhere else); other tools are remembered by name.
+ * command is remembered whole, as its words ("git status", "swift test"): one simple command with
+ * a known-safe program (SAFE), no variables, quotes, substitutions or redirects, and no flag that
+ * hands it something to run. File writes and edits are never remembered (each one goes somewhere
+ * else); other tools are remembered by name.
  */
 export function alwaysKey(call) {
   if (call?.name === "write" || call?.name === "edit" || call?.name === "read") return null;
@@ -33,13 +42,14 @@ export function alwaysKey(call) {
   const command = String(call.arguments?.command ?? "").trim();
   if (!command || command.length > 200 || /[;&|`<>$'"\\\n(){}*?\[\]~!#]/.test(command)) return null;
   const words = command.split(/\s+/);
-  const program = words[0];
-  if (!/^[a-z0-9][\w.+-]*$/i.test(program) || RUNS_CODE.has(program.toLowerCase()) || INTERPRETER.test(program)) return null;
-  if (words.some((word) => /^-(c|e)$|^--(eval|exec|command|config)\b|^-c\S/.test(word))) return null;
+  const allowed = Object.hasOwn(SAFE, words[0]) ? SAFE[words[0]] : null;
+  if (!allowed || (Array.isArray(allowed) && !allowed.includes(words[1]))) return null;
+  if (words[0] === "gh" && !GH_READS.has(words[2])) return null;
+  if (words.some((word) => /^-(c|e|exec|execdir|ok|C)$|^--(eval|exec|command|config|upload-pack|ext-diff|pre-processor)\b|^-c\S/.test(word))) return null;
   return `bash:${words.join(" ")}`;
 }
 
-/** "Always allow `npm test`" / "Always allow phone_location", for the dialog. */
+/** "Always allow `git status`" / "Always allow phone_location", for the dialog. */
 export function alwaysLabel(key) {
   return key.startsWith("bash:") ? `Always allow \`${key.slice(5)}\`` : `Always allow ${key}`;
 }
