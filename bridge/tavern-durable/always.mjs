@@ -11,29 +11,25 @@ export const ALWAYS_FILE = "always-allow.json";
 
 /**
  * The programs (and, where it matters, subcommands) whose exact commands may be remembered: ones
- * that read, build or test without running code the agent hands them. Everything else, such as
- * interpreters, wrappers and package-script runners (npm test runs whatever package.json says),
- * asks every time.
+ * that only read. Builds, tests and commits run code from the project (hooks, build scripts,
+ * package.json) and git's diff and log can run drivers a repo configures, so those ask every
+ * time (or go to the judge); so does any command with a flag.
  */
 const SAFE = {
   ls: true, cat: true, head: true, tail: true, wc: true, pwd: true, date: true, uname: true, which: true, file: true,
-  stat: true, du: true, df: true, tree: true, rg: true, grep: true, echo: true, diff: true, sort: true, uniq: true,
-  git: ["status", "log", "diff", "show", "branch", "fetch", "pull", "add", "commit", "stash", "switch", "remote", "rev-parse", "blame"],
+  stat: true, du: true, df: true, tree: true, rg: true, grep: true, echo: true,
+  git: ["status", "branch", "remote", "rev-parse"],
   gh: ["pr", "issue", "run", "repo", "release"],
-  swift: ["build", "test"],
-  cargo: ["build", "test", "check", "clippy", "fmt"],
-  go: ["build", "test", "vet"],
-  docker: ["ps", "images", "logs", "inspect"],
-  kubectl: ["get", "describe", "logs"],
+  docker: ["ps", "images"],
+  kubectl: ["get"],
 };
 /** gh subcommands that only read. */
 const GH_READS = new Set(["list", "view", "status", "diff", "checks"]);
 
 /**
  * What "always allow" remembers for a call, or null when it can't be remembered safely. A shell
- * command is remembered whole, as its words ("git status", "swift test"): one simple command with
- * a known-safe program (SAFE), no variables, quotes, substitutions or redirects, and no flag that
- * hands it something to run. File writes and edits are never remembered (each one goes somewhere
+ * command is remembered whole, as its words ("git status", "gh pr list"): one simple command with
+ * a read-only program (SAFE), no flags, variables, quotes, substitutions or redirects. File writes and edits are never remembered (each one goes somewhere
  * else); other tools are remembered by name.
  */
 export function alwaysKey(call) {
@@ -45,7 +41,8 @@ export function alwaysKey(call) {
   const allowed = Object.hasOwn(SAFE, words[0]) ? SAFE[words[0]] : null;
   if (!allowed || (Array.isArray(allowed) && !allowed.includes(words[1]))) return null;
   if (words[0] === "gh" && !GH_READS.has(words[2])) return null;
-  if (words.some((word) => /^-(c|e|exec|execdir|ok|C)$|^--(eval|exec|command|config|upload-pack|ext-diff|pre-processor)\b|^-c\S/.test(word))) return null;
+  // No flags at all: some hand a program something to run or somewhere to write.
+  if (words.some((word) => word.startsWith("-"))) return null;
   return `bash:${words.join(" ")}`;
 }
 
