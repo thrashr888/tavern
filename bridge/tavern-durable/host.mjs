@@ -21,6 +21,7 @@ import { ASK_PREFIX, askExtension } from "./ask.mjs";
 import { Judge } from "./judge.mjs";
 import { capabilities } from "./capabilities.mjs";
 import { savedMinutes, selfExtension } from "./self.mjs";
+import { AlwaysAllow } from "./always.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -68,7 +69,9 @@ const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && 
 const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_WORKSPACE, log });
 const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
 const selfTools = selfExtension({ approvals, cwd: AGENT_CWD, name: process.env.AGENT_NAME, info: selfInfo, setMinutes: setHeartbeatMinutes });
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), selfTools, mcp];
+// What Paul said to always allow, per agent (always-allow.json in its folder).
+const always = new AlwaysAllow(AGENT_CWD);
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify, always }), askExtension(approvals), selfTools, mcp];
 // Pi packages installed for this agent, such as its memory. TAVERN_DURABLE_PI_LOADER swaps in a
 // fake loader for tests. The bridge's callbacks reach the controller once the session is open.
 const piLoaded = PI_EXTENSIONS === "off" ? null : await loadPi().catch((error) => (log(`pi extensions skipped: ${error?.message ?? error}`), null));
@@ -168,7 +171,7 @@ async function handle(socket, line) {
         const { model, thinkingLevel } = agentStateOf(current);
         return reply(true, { sessionId: String(current.session?.id ?? "durable"), isStreaming: live.busy, durable: true, model, thinkingLevel,
                              heartbeat: heartbeatState(), usage: usageOf(current),
-                             pendingApprovals: approvals.size, capabilities: machine });
+                             pendingApprovals: approvals.size, capabilities: machine, alwaysAllow: always.list() });
       }
       case "get_entries": {
         const entries = entriesSince(piEntries(current), command.since);
@@ -225,11 +228,13 @@ async function handle(socket, line) {
       case "compact":
         background(controller.compact(command.customInstructions));
         return reply(true);
+      case "forget_always_allow":
+        return reply(true, { removed: always.remove(String(command.key ?? "")), alwaysAllow: always.list() });
       case "extension_ui_response": {
         // Approval answers (cancel counts as no) and ask answers; notices need none.
         const id = String(command.id ?? "");
         if (id.startsWith(ASK_PREFIX)) approvals.reply(id, typeof command.value === "string" ? { value: command.value } : { cancelled: true });
-        else approvals.answer(id, command.confirmed === true);
+        else approvals.answer(id, command.confirmed === true, undefined, command.always === true);
         return;
       }
       default:
@@ -353,8 +358,10 @@ function background(promise) {
 }
 
 function dialogRequest(dialog) {
-  const { id, method = "confirm", title, message, options, placeholder } = dialog;
-  return { type: "extension_ui_request", id, method, title, message, ...(options ? { options } : {}), ...(placeholder ? { placeholder } : {}) };
+  const { id, method = "confirm", title, message, options, placeholder, always } = dialog;
+  // `always`: the label for an "Always allow" answer (`confirmed` plus `always: true`).
+  return { type: "extension_ui_request", id, method, title, message, ...(options ? { options } : {}), ...(placeholder ? { placeholder } : {}),
+           ...(always ? { always } : {}) };
 }
 
 function send(socket, record) {

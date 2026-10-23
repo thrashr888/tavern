@@ -99,7 +99,7 @@ public struct ProofOfValue: Equatable, Sendable {
             let json = try? JSONValue.decode(event.payload)
             if event.kind == ApprovalLog.kind {
                 let answer = json?["answer"]?.stringValue
-                if answer == "Approved" { approved += 1 } else if answer == "Declined" { declined += 1 }
+                if answer == "Approved" || answer == "Always allowed" { approved += 1 } else if answer == "Declined" { declined += 1 }
             } else if event.kind == SpellRun.eventKind, let spell = json?["spellId"]?.stringValue {
                 // A run started from Tavern's Spellbook counts as a cast too.
                 spells[spell, default: 0] += 1

@@ -46,6 +46,8 @@ public struct PiAgentConfig: Equatable, Sendable {
     public var usage: PiUsage?
     /// What the agent's machine offers (durable hosts): MCP servers, containers, CLIs.
     public var capabilities: PiCapabilities?
+    /// What Paul told the agent to always allow (durable hosts): "bash:npm", "phone_location".
+    public var alwaysAllow: [String] = []
 
     public init(model: PiModel? = nil, thinkingLevel: String? = nil, sessionID: String? = nil, durable: Bool = false,
                 heartbeat: PiHeartbeat? = nil) {
@@ -66,6 +68,7 @@ public struct PiAgentConfig: Equatable, Sendable {
         )
         usage = PiUsage(json: state?["usage"])
         capabilities = PiCapabilities(json: state?["capabilities"])
+        alwaysAllow = state?["alwaysAllow"]?.arrayValue?.compactMap(\.stringValue) ?? []
     }
 }
 

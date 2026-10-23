@@ -72,7 +72,10 @@ struct AgentInspectorView: View {
                     case .about:
                         IdentitySection(agent: agent, projects: model.roster.mailProjects,
                                         session: model.session(for: agent.id))
-                        if let session = model.session(for: agent.id) { MachineSection(session: session) }
+                        if let session = model.session(for: agent.id) {
+                            AlwaysAllowSection(session: session)
+                            MachineSection(session: session)
+                        }
                         AgentSpellsSection(member: agent, book: model.spellbook)
                         InfoCard(title: "Schedule") {
                             if let heartbeat = model.session(for: agent.id)?.config.heartbeat {
@@ -293,6 +296,39 @@ private struct IdentitySection: View {
     private var projectNames: String? {
         guard let ids = agent.projects, !ids.isEmpty else { return nil }
         return ids.map { id in projects.first { $0.id == id }?.label ?? id }.joined(separator: ", ")
+    }
+}
+
+/// What Paul told this agent to always allow, each with a way to take it back.
+private struct AlwaysAllowSection: View {
+    @ObservedObject var session: PiAgentSession
+
+    var body: some View {
+        let keys = session.config.alwaysAllow
+        if !keys.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Always allowed").tavernFont(.headline, weight: .semibold)
+                Text("Runs without asking. Deletes, sudo, secrets and force-pushes still ask.")
+                    .tavernFont(.caption).foregroundStyle(.secondary)
+                ForEach(keys, id: \.self) { key in
+                    HStack {
+                        Text(Self.label(key)).tavernFont(.callout)
+                        Spacer()
+                        Button("Ask again") { Task { await session.forgetAlwaysAllow(key) } }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary.opacity(0.8)))
+        }
+    }
+
+    /// "npm commands" for "bash:npm", else the tool's name.
+    static func label(_ key: String) -> String {
+        key.hasPrefix("bash:") ? "\(key.dropFirst(5)) commands" : key
     }
 }
 

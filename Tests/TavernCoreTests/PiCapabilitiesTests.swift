@@ -20,3 +20,15 @@ final class PiCapabilitiesTests: XCTestCase {
         XCTAssertNil(PiAgentConfig(state: try JSONValue.decode(Data(#"{"durable": true}"#.utf8))).capabilities)
     }
 }
+
+final class AlwaysAllowTests: XCTestCase {
+    func testDialogOffersAlwaysAndTheAnswerSaysSo() throws {
+        let line = Data(#"{"type":"extension_ui_request","id":"approval-7","method":"confirm","title":"Allow bash?","always":"Always allow npm commands"}"#.utf8)
+        guard case .dialog(let dialog) = try PiRecord.parse(line) else { return XCTFail("not a dialog") }
+        XCTAssertEqual(dialog.alwaysLabel, "Always allow npm commands")
+        XCTAssertEqual(PiDialogAnswer.alwaysAllow.json(dialogID: "approval-7"),
+                       ["type": "extension_ui_response", "id": "approval-7", "confirmed": true, "always": true])
+        let state = try JSONValue.decode(Data(#"{"alwaysAllow": ["bash:npm", "phone_location"]}"#.utf8))
+        XCTAssertEqual(PiAgentConfig(state: state).alwaysAllow, ["bash:npm", "phone_location"])
+    }
+}
