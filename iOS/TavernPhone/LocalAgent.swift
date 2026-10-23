@@ -166,9 +166,12 @@ final class LocalAgentRuntime {
     private func start(_ text: String?) {
         turn = Task { [weak self] in
             guard let self else { return }
-            self.tainted = false
+            // The history in the instructions carries earlier turns' reading (and heartbeat mail)
+            // into this one, so a turn starts tainted when any of it was.
+            self.tainted = self.entries.suffix(13).contains { $0["tainted"]?.boolValue == true }
             self.emit(["type": "agent_start"])
             if let text {
+                if text.hasPrefix("[Heartbeat ") { self.tainted = true }
                 self.append(["role": "user", "content": .array([["type": "text", "text": .string(text)]])])
             } else {
                 self.setUpMemory()
@@ -455,7 +458,8 @@ final class LocalAgentRuntime {
 
     private func append(_ message: JSONValue) {
         entries.append(["type": "message", "id": .string(UUID().uuidString),
-                        "timestamp": .string(ISO8601DateFormatter().string(from: Date())), "message": message])
+                        "timestamp": .string(ISO8601DateFormatter().string(from: Date())), "message": message,
+                        "tainted": .bool(tainted)])
         let saved: JSONValue = ["sessionId": .string(sessionID), "entries": .array(entries)]
         try? saved.encoded().write(to: folder.appendingPathComponent("session.json"), options: .atomic)
     }
