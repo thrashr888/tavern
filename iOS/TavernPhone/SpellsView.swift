@@ -4,18 +4,27 @@ import TavernCore
 /// The spellbook as of the build: search it, read a spell, and cast it on an agent, which sends
 /// the same message the Mac does (read it with spellbook_get, follow it, cite the version).
 struct SpellsView: View {
+    @EnvironmentObject private var model: PhoneModel
     @State private var query = ""
+    @State private var starredOnly = false
+    @State private var kind = Kind.all
+    @State private var owner: String?
+
+    enum Kind: String, CaseIterable { case all = "All", spells = "Spells", rituals = "Rituals" }
 
     var body: some View {
         Group {
             if let book = Party.spellbook {
-                List(filtered(book.spells)) { spell in
+                let shown = filtered(book.spells)
+                List(shown) { spell in
                     NavigationLink(value: spell.id) { SpellRow(spell: spell) }
                 }
+                .overlay { if shown.isEmpty { ContentUnavailableView.search } }
                 .searchable(text: $query, prompt: "Search spells")
                 .navigationDestination(for: String.self) { id in
                     if let spell = book.spell(id: id) { SpellDetail(spell: spell, commit: book.commit) }
                 }
+                .toolbar { filters(owners: Set(relevant(book.spells).compactMap(\.owner)).sorted()) }
             } else {
                 ContentUnavailableView("No spellbook in this build", systemImage: "book.closed",
                                        description: Text("scripts/phone.sh copies it from the Mac's Tavern folder."))
@@ -24,11 +33,41 @@ struct SpellsView: View {
         .navigationTitle("Spells")
     }
 
-    /// Every word of the search in the id, title or trigger; Paul's starred spells first.
+    /// The Mac's Spellbook filters: starred, spells or rituals, and owner.
+    private func filters(owners: [String]) -> some ToolbarContent {
+        ToolbarItem {
+            Menu {
+                Toggle("Starred", systemImage: "star", isOn: $starredOnly)
+                Picker("Kind", selection: $kind) {
+                    ForEach(Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                Picker("Owner", selection: $owner) {
+                    Text("Anyone").tag(String?.none)
+                    ForEach(owners, id: \.self) { Text($0.capitalized).tag(String?.some($0)) }
+                }
+            } label: {
+                Label("Filter", systemImage: starredOnly || kind != .all || owner != nil
+                      ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            }
+        }
+    }
+
+    /// Spells for the agents on this phone (applies to "all" or one of them), retired ones out.
+    private func relevant(_ spells: [Spell]) -> [Spell] {
+        let here = Set(model.agents.flatMap { [$0.id.lowercased(), $0.name.lowercased()] })
+        return spells.filter { spell in
+            !spell.isRetired && spell.appliesTo.contains { $0.lowercased() == "all" || here.contains($0.lowercased()) }
+        }
+    }
+
+    /// The filters and every word of the search (id, title or trigger); Paul's starred spells first.
     private func filtered(_ spells: [Spell]) -> [Spell] {
         let words = query.lowercased().split(whereSeparator: \.isWhitespace)
         let stars = Party.info.spellbookStars ?? []
-        return spells
+        return relevant(spells)
+            .filter { !starredOnly || stars.contains($0.id) }
+            .filter { kind == .all || (kind == .rituals) == $0.isRitual }
+            .filter { owner == nil || $0.owner == owner }
             .filter { spell in
                 let text = "\(spell.id) \(spell.title) \(spell.description)".lowercased()
                 return words.allSatisfy { text.contains($0) }

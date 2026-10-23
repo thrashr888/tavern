@@ -123,6 +123,8 @@ export function assess(call, { policy = "risky", cwd = process.cwd(), mcpChanges
       return policy === "all" && call.name !== "read" ? soft("changes a file") : null;
     }
     default:
+      // Tools the phone lends share where Paul is or what his phone is doing.
+      if (mcpChanges?.has(call?.name) && call.name.startsWith("phone_")) return soft(`reads your iPhone's ${call.name.slice(6)}`);
       // MCP tools that aren't read-only (see mcp.mjs) change something on their server.
       if (mcpChanges?.has(call?.name)) return soft(`runs ${call.name.replace("__", "'s ")}, which can change things`);
       return null;

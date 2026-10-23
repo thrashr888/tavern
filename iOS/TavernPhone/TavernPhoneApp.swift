@@ -15,6 +15,7 @@ struct TavernPhoneApp: App {
                 .environmentObject(model)
                 .environmentObject(pap)
                 .onAppear { model.requestNotifications() }
+                .onOpenURL { pap.handle($0) }
         }
         .onChange(of: scenePhase) { _, phase in model.inBackground = phase != .active }
     }
@@ -87,6 +88,8 @@ final class PhoneModel: ObservableObject {
     private var lastDialog: [String: String] = [:]
     var inBackground = false
     private let store: EventStore?
+    /// Location and battery, lent to every agent while the app is connected.
+    private let sensors = PhoneSensors()
     private static let key = "tavern.phone.agents"
 
     init() {
@@ -117,6 +120,8 @@ final class PhoneModel: ObservableObject {
     private func start(_ agent: PhoneAgent) {
         guard let store, sessions[agent.id] == nil else { return }
         let session = PiAgentSession(agentID: agent.id, store: store) { PiTCPTransport(host: agent.host, port: agent.port) }
+        session.lentTools = PhoneSensors.tools
+        session.lentToolHandler = { [sensors] tool, arguments in try await sensors.answer(tool, arguments) }
         sessions[agent.id] = session
         watchers[agent.id] = session.$dialog.combineLatest(session.$presence)
             .sink { [weak self] dialog, presence in

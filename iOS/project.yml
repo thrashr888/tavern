@@ -19,6 +19,13 @@ targets:
       - path: Party
         type: folder
         optional: true
+    # PAP's sign-in comes back to the app on this scheme when it runs in Safari.
+    info:
+      path: TavernPhone/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.thrashr888.tavern.phone
+            CFBundleURLSchemes: [dev.thrashr888.tavern.phone]
     dependencies:
       - package: Tavern
         product: TavernCore
@@ -34,6 +41,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # Hosts are tailnet or loopback addresses: plain TCP, no TLS of their own.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Tavern talks to your Pi agents' hosts on your network.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Your agents can ask where you are; you approve each time.
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Tavern listens while you dictate a message.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Tavern turns your dictation into text, on the iPhone when it can.
         SWIFT_VERSION: "5.0"

@@ -21,6 +21,7 @@ import { ASK_PREFIX, askExtension } from "./ask.mjs";
 import { Judge } from "./judge.mjs";
 import { capabilities } from "./capabilities.mjs";
 import { savedMinutes, selfExtension } from "./self.mjs";
+import { LentTools } from "./lent-tools.mjs";
 import { mcpExtension, readCard, resultText, startServers } from "./mcp.mjs";
 import { HeartbeatChecks, beatsThisWeek, loadChecks, recordBeat, wakeMessage } from "./heartbeat.mjs";
 import { agentStateOf, entriesSince, eventsBetween, liveOf, piEntries, usageOf } from "./map.mjs";
@@ -63,12 +64,14 @@ setInterval(async () => { machine = await capabilities(mcpServers); }, 5 * 60_00
 const bookkeeping = new Set(["pap__start_task", "pap__finish_task"]);
 // Tavern's own tools (the home agent's "tavern" server) ask the user in Tavern itself.
 const asksItself = (name) => name.startsWith("tavern__");
-const mcpChanges = new Set(mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name) && !asksItself(tool.name)).map((tool) => tool.name));
+// Tools the phone lends (location, battery) reveal where Paul is, so they ask like MCP changes.
+const lent = new LentTools(send);
+const mcpChanges = new Set([...mcp.tools.filter((tool) => tool.replay !== "safe" && !bookkeeping.has(tool.name) && !asksItself(tool.name)).map((tool) => tool.name), ...lent.names]);
 // A decision model lets routine calls run unasked (judge.mjs); the agent's own folders are routine.
 const judge = new Judge({ cwd: AGENT_CWD, workspace: process.env.TAVERN_DURABLE_WORKSPACE, log });
 const notify = (message) => broadcast({ type: "extension_ui_request", id: `judge-${Date.now()}`, method: "notify", message, notifyType: "info" });
 const selfTools = selfExtension({ approvals, cwd: AGENT_CWD, name: process.env.AGENT_NAME, info: selfInfo, setMinutes: setHeartbeatMinutes });
-const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), selfTools, mcp];
+const extensions = [approvalExtension(approvals, { policy: APPROVALS, cwd: AGENT_CWD, mcpChanges, judge, notify }), askExtension(approvals), selfTools, lent.extension(), mcp];
 // Pi packages installed for this agent, such as its memory. TAVERN_DURABLE_PI_LOADER swaps in a
 // fake loader for tests. The bridge's callbacks reach the controller once the session is open.
 const piLoaded = PI_EXTENSIONS === "off" ? null : await loadPi().catch((error) => (log(`pi extensions skipped: ${error?.message ?? error}`), null));
@@ -146,8 +149,8 @@ const server = net.createServer((socket) => {
   // A client that (re)connects while a tool waits sees the question again.
   const open = approvals.current();
   if (open) send(socket, dialogRequest(open));
-  socket.on("close", () => clients.delete(socket));
-  socket.on("error", () => clients.delete(socket));
+  socket.on("close", () => (clients.delete(socket), lent.drop(socket)));
+  socket.on("error", () => (clients.delete(socket), lent.drop(socket)));
 });
 server.listen(PORT, BIND, () => log(`listening on ${BIND}:${PORT}`));
 
@@ -225,6 +228,12 @@ async function handle(socket, line) {
       case "compact":
         background(controller.compact(command.customInstructions));
         return reply(true);
+      case "lend_tools":
+        return reply(true, { tools: lent.lend(socket, command.tools) });
+      case "lent_tool_response":
+        // An answer, not a command: nothing to reply.
+        lent.answer(socket, command);
+        return;
       case "extension_ui_response": {
         // Approval answers (cancel counts as no) and ask answers; notices need none.
         const id = String(command.id ?? "");

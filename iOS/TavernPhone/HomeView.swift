@@ -8,12 +8,12 @@ struct HomeView: View {
     var body: some View {
         List {
             if let portrait = Party.portrait {
-                Section {
-                    // The party, edge to edge, as on the Mac Dashboard.
-                    Image(uiImage: portrait).resizable().scaledToFill()
-                        .frame(maxWidth: .infinity).frame(height: 190).clipped()
-                        .listRowInsets(EdgeInsets())
-                }
+                // The party, edge to edge from the top of the screen, all of it (its own name strip
+                // is the title).
+                Image(uiImage: portrait).resizable().aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
             }
             Section("Needs you") {
                 let waiting = model.agents.filter { needsYou($0) }
@@ -43,6 +43,9 @@ struct HomeView: View {
                 }
             }
         }
+        .listStyle(.plain)
+        .ignoresSafeArea(edges: Party.portrait == nil ? [] : .top)
+        .toolbar(Party.portrait == nil ? .automatic : .hidden, for: .navigationBar)
         .navigationTitle(Party.info.partyName ?? "Tavern")
         .refreshable {
             for agent in model.agents { await model.session(for: agent)?.reconnectNow() }

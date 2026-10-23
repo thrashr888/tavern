@@ -17,15 +17,61 @@ final class PAPPhone: ObservableObject {
         Task { signedIn = await oauth.isSignedIn }
     }
 
-    func signIn() async {
+    /// Whether the in-app sign-in sheet has failed, so Safari is offered instead.
+    @Published private(set) var offerSafari = false
+    private var safariReturn: CheckedContinuation<[String: String], Error>?
+
+    /// In the app's own sign-in sheet, or in Safari, which comes back on the app's URL scheme
+    /// (for a sign-in the sheet can't finish, such as an emailed link or Google's).
+    func signIn(inSafari: Bool = false) async {
         error = nil
         do {
             try await oauth.signIn(redirect: "\(Self.scheme):/oauth", clientName: "Tavern iPhone") { url in
-                try await WebSignIn.run(url, scheme: Self.scheme)
+                if inSafari { return try await self.openInSafari(url) }
+                return try await WebSignIn.run(url, scheme: Self.scheme)
             }
             signedIn = true
+            offerSafari = false
         } catch {
-            self.error = "Couldn't sign in: \(error)"
+            self.error = Self.message(for: error)
+            offerSafari = true
+        }
+    }
+
+    private func openInSafari(_ url: URL) async throws -> [String: String] {
+        safariReturn?.resume(throwing: CancellationError())
+        return try await withCheckedThrowingContinuation { done in
+            safariReturn = done
+            UIApplication.shared.open(url)
+        }
+    }
+
+    /// The app opened with a URL: PAP sending a Safari sign-in back.
+    func handle(_ url: URL) {
+        guard url.scheme == Self.scheme, let done = safariReturn else { return }
+        safariReturn = nil
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        done.resume(returning: Dictionary(items.compactMap { item in item.value.map { (item.name, $0) } }, uniquingKeysWith: { a, _ in a }))
+    }
+
+    /// What went wrong, in words: nothing technical unless there's nothing better to say.
+    static func message(for error: Error, signingIn: Bool = true) -> String? {
+        switch error {
+        case ASWebAuthenticationSessionError.canceledLogin:
+            return "Sign-in closed before it finished. Try again, or sign in with Safari, which handles Google and emailed links."
+        case ASWebAuthenticationSessionError.presentationContextNotProvided, ASWebAuthenticationSessionError.presentationContextInvalid:
+            return "Tavern couldn't open the sign-in page. Try again."
+        case OAuthError.denied:
+            return "Personal Agent Proxy didn't allow Tavern iPhone. Approve it there, then sign in again."
+        case OAuthError.stateMismatch, OAuthError.noCode:
+            return "The sign-in didn't come back complete. Tap Sign in to try again."
+        case let pap as PAPError:
+            return pap.description
+        case let url as URLError where url.code == .notConnectedToInternet || url.code == .networkConnectionLost:
+            return "The iPhone is offline. Sign in once it's connected."
+        default:
+            return signingIn ? "Couldn't sign in to Personal Agent Proxy (\(error.localizedDescription))."
+                : "Personal Agent Proxy didn't answer (\(error.localizedDescription)). Pull to try again."
         }
     }
 
@@ -135,7 +181,10 @@ private struct NeedsPAP<Content: View>: View {
                 Text("Sign in so Tavern can read \(purpose). In PAP, approve the \"Tavern iPhone\" agent and give it read access.")
             } actions: {
                 Button("Sign in") { Task { await pap.signIn() } }.buttonStyle(.borderedProminent).tint(Color.tavernAccent)
-                if let error = pap.error { Text(error).font(.footnote).foregroundStyle(.red) }
+                if pap.offerSafari {
+                    Button("Sign in with Safari instead") { Task { await pap.signIn(inSafari: true) } }
+                }
+                if let error = pap.error { Text(error).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
             }
         }
     }
@@ -176,7 +225,7 @@ struct MailView: View {
             rows = try await pap.inbox()
             error = nil
         } catch {
-            self.error = "\(error)"
+            self.error = PAPPhone.message(for: error, signingIn: false)
         }
         loaded = true
     }
@@ -217,7 +266,7 @@ struct LinearView: View {
             rows = try await pap.issues()
             error = nil
         } catch {
-            self.error = "\(error)"
+            self.error = PAPPhone.message(for: error, signingIn: false)
         }
         loaded = true
     }

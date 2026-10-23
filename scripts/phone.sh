@@ -14,13 +14,38 @@ command -v xcodegen >/dev/null || { echo "Needs xcodegen: brew install xcodegen"
 
 listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
-# The demo agent: a durable host on a pretend runtime.
-demo_home=".build/phone-demo"
+# The demo agent, for trying sends and approvals safely: a real Pi agent on this Mac's local model
+# (the same one Flint uses, through Ollama: free, nothing leaves the Mac), working in a sandbox
+# folder with every shell command and file change asking first. Without Pi here
+# (~/tavern-durable/.pi), a scripted stand-in (docs/demo/phone-runtime.mjs) answers instead.
+demo_home="$PWD/.build/phone-demo"
+pi_repo="${PI_REPO:-$HOME/tavern-durable/.pi}"
 if ! listening 19614; then
-  mkdir -p "$demo_home"
-  TAVERN_DURABLE_RUNTIME="$PWD/docs/demo/phone-runtime.mjs" TAVERN_DURABLE_PORT=19614 TAVERN_DURABLE_HEARTBEAT_MINUTES=0 \
-    TAVERN_DURABLE_REQUESTS="$demo_home/requests.json" AGENT_CWD="$demo_home" \
-    nohup node bridge/tavern-durable/host.mjs >"$demo_home/host.log" 2>&1 &
+  mkdir -p "$demo_home/.pi"
+  if [ -d "$pi_repo/packages/coding-agent" ]; then
+    if [ ! -f "$demo_home/README.md" ]; then
+      cp -R docs/demo/sandbox/. "$demo_home/"
+      # Its commits are the demo's, unsigned (Paul's signing key stays his).
+      git -C "$demo_home" init -q && git -C "$demo_home" config commit.gpgsign false && git -C "$demo_home" add -A && git -C "$demo_home" commit -q -m "Demo project" 2>/dev/null || true
+    fi
+    flint_settings="$HOME/Workspace/agents/flint/.pi/settings.json"
+    if [ ! -f "$demo_home/.pi/settings.json" ]; then
+      # Flint's model and the party's Pi packages (Cortex memory, agentkernel), as pi-bundle gives them.
+      python3 -c 'import json,sys; s=json.load(open(sys.argv[1])) if len(sys.argv) > 2 else {}; json.dump({k: s[k] for k in ("defaultProvider", "defaultModel", "defaultThinkingLevel", "packages") if k in s} or {"defaultProvider": "ollama", "defaultModel": "qwen3.5:35b-a3b-coding-nvfp4"}, open(sys.argv[-1], "w"), indent=2)' \
+        $( [ -f "$flint_settings" ] && printf '%s\n' "$flint_settings" ) "$demo_home/.pi/settings.json"
+    fi
+    # And Alchemy's bridge, as the Mac agents have it.
+    if [ -f "$HOME/.pi/agent/extensions/alchemy.ts" ]; then
+      mkdir -p "$demo_home/.pi/extensions" && ln -sfn "$HOME/.pi/agent/extensions/alchemy.ts" "$demo_home/.pi/extensions/alchemy.ts"
+    fi
+    PI_REPO="$pi_repo" TAVERN_DURABLE_PORT=19614 TAVERN_DURABLE_HEARTBEAT_MINUTES=0 TAVERN_DURABLE_APPROVALS=all \
+      TAVERN_DURABLE_REQUESTS="$demo_home/requests.json" AGENT_CWD="$demo_home" AGENT_NAME=Demo \
+      nohup node --import "$pi_repo/packages/coding-agent/src/experimental/source-resolver.ts" bridge/tavern-durable/host.mjs >"$demo_home/host.log" 2>&1 &
+  else
+    TAVERN_DURABLE_RUNTIME="$PWD/docs/demo/phone-runtime.mjs" TAVERN_DURABLE_PORT=19614 TAVERN_DURABLE_HEARTBEAT_MINUTES=0 \
+      TAVERN_DURABLE_REQUESTS="$demo_home/requests.json" AGENT_CWD="$demo_home" \
+      nohup node bridge/tavern-durable/host.mjs >"$demo_home/host.log" 2>&1 &
+  fi
 fi
 
 # The party: each Pi agent in the Mac's roster, as name=host:port for the phone.
