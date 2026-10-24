@@ -1,6 +1,8 @@
 import Foundation
 import FoundationModels
+import ImagePlayground
 import TavernCore
+import UIKit
 
 /// An agent that lives on the iPhone itself. Pi can't run on iOS, so this speaks Pi's RPC records
 /// in-process (the same `get_state`, `get_entries`, `prompt` and events a durable host sends) and
@@ -9,6 +11,8 @@ import TavernCore
 /// Each agent keeps its own folder in Application Support/LocalAgents/<id>: the thread
 /// (session.json), its memory (MEMORY.md), which goes into every turn's instructions, and its
 /// heartbeat: the schedule (heartbeat.json) and what to do on a beat (HEARTBEAT.md), made together.
+/// On its first start it picks who it is (persona.json): a name, a D&D class, the animal it is,
+/// and a portrait it draws with Image Playground (avatar.png).
 @MainActor
 final class LocalAgentRuntime {
     /// What a phone agent's tools reach: the phone's sensors, and Mail and Linear through the
@@ -24,7 +28,18 @@ final class LocalAgentRuntime {
         var addReminder: @MainActor (_ title: String, _ due: String?) async throws -> String
     }
 
-    let agent: PhoneAgent
+    private(set) var agent: PhoneAgent
+    /// Who the agent chose to be; nil until its first start.
+    private(set) var persona: Persona?
+    /// Tells the app the agent's new name and class (its id stays the same).
+    var onPersona: ((Persona) -> Void)?
+
+    struct Persona: Codable {
+        var name: String
+        var partyClass: String
+        var animal: String
+        var look: String
+    }
     var reach: Reach
     private let folder: URL
     private var sessionID: String
@@ -38,12 +53,14 @@ final class LocalAgentRuntime {
     private static var running: [String: LocalAgentRuntime] = [:]
 
     /// One runtime per agent for the app's life, so a reconnect keeps a turn in progress.
-    static func runtime(for agent: PhoneAgent, reach: Reach) -> LocalAgentRuntime {
+    static func runtime(for agent: PhoneAgent, reach: Reach, onPersona: @escaping (Persona) -> Void) -> LocalAgentRuntime {
         if let found = running[agent.id] {
             found.reach = reach
+            found.onPersona = onPersona
             return found
         }
         let made = LocalAgentRuntime(agent: agent, reach: reach)
+        made.onPersona = onPersona
         running[agent.id] = made
         return made
     }
@@ -72,6 +89,9 @@ final class LocalAgentRuntime {
         sessionID = saved?["sessionId"]?.stringValue ?? UUID().uuidString
         entries = saved?["entries"]?.arrayValue ?? []
         setUpHeartbeat()
+        persona = (try? Data(contentsOf: folder.appendingPathComponent("persona.json"))).flatMap { try? JSONDecoder().decode(Persona.self, from: $0) }
+        if let persona { self.agent.name = persona.name }
+        Party.setLocalAvatar(UIImage(contentsOfFile: folder.appendingPathComponent("avatar.png").path), for: agent.name)
         let state = (try? Data(contentsOf: heartbeatStateURL)).flatMap { try? JSONValue.decode($0) }
         seen = state?["seen"]?.arrayValue.map { $0.compactMap(\.stringValue) }
         noted = state?["noted"]?.arrayValue?.compactMap(\.stringValue) ?? (seen == nil ? [] : ["Gmail"])
@@ -91,8 +111,8 @@ final class LocalAgentRuntime {
     func attach(_ onLine: @escaping @Sendable (Data) -> Void) {
         listener = onLine
         asking.values.forEach(emit)
-        // A new agent sets itself up: its memory, then a hello in its own words.
-        if entries.isEmpty, turn == nil { start(nil) }
+        // A new agent sets itself up: who it is, its memory, then a hello in its own words.
+        if entries.isEmpty || persona == nil, turn == nil { start(nil) }
     }
 
     func detach() { listener = nil }
@@ -174,6 +194,7 @@ final class LocalAgentRuntime {
                 if text.hasPrefix("[Heartbeat ") { self.tainted = true }
                 self.append(["role": "user", "content": .array([["type": "text", "text": .string(text)]])])
             } else {
+                if self.persona == nil { await self.chooseIdentity() }
                 self.setUpMemory()
             }
             await self.respond(to: text)
@@ -184,9 +205,49 @@ final class LocalAgentRuntime {
         }
     }
 
+    /// Picks a name no one in the party has, a D&D class, an animal and a look, then draws a
+    /// portrait. Without Apple's model it takes a name from a short list, so it never asks twice.
+    private func chooseIdentity() async {
+        let taken = Set(((Party.info.members ?? []).map(\.name) + LocalAgentRuntime.running.values.map(\.agent.name)).map { $0.lowercased() })
+        var chosen: Persona?
+        if #available(iOS 26.0, *) {
+            let animals = Set(((Party.info.members ?? []).compactMap(\.animal) + LocalAgentRuntime.running.values.compactMap(\.persona?.animal)).map { $0.lowercased() })
+            chosen = try? await LocalModel.persona(taken: taken.sorted(), animals: animals.sorted(), role: agent.role)
+        }
+        var persona = chosen ?? Persona(name: "", partyClass: "Bard", animal: "otter", look: "A small otter with a satchel and a lantern.")
+        if persona.name.isEmpty || taken.contains(persona.name.lowercased()) {
+            persona.name = ["Pip", "Bramble", "Juniper", "Sorrel", "Thistle", "Moss"].first { !taken.contains($0.lowercased()) } ?? "Pip"
+        }
+        let image = await Self.portrait(of: persona)
+        try? image?.pngData()?.write(to: folder.appendingPathComponent("avatar.png"))
+        Party.setLocalAvatar(image, for: persona.name)
+        // Earlier memory (an agent that already had a name) keeps its lines; the new name goes on top.
+        if !memory.isEmpty {
+            try? (memory + "- I chose a name of my own: \(persona.name), a \(persona.animal) \(persona.partyClass).\n").write(to: memoryURL, atomically: true, encoding: .utf8)
+        }
+        try? JSONEncoder().encode(persona).write(to: folder.appendingPathComponent("persona.json"))
+        self.persona = persona
+        agent.name = persona.name
+        onPersona?(persona)
+    }
+
+    /// A portrait in the party's style, or nil where Image Playground isn't available.
+    private static func portrait(of persona: Persona) async -> UIImage? {
+        guard #available(iOS 18.4, *), let creator = try? await ImageCreator() else { return nil }
+        let style = creator.availableStyles.contains(.illustration) ? ImagePlaygroundStyle.illustration : creator.availableStyles.first
+        guard let style else { return nil }
+        let concept = "A portrait of a \(persona.animal), a fantasy \(persona.partyClass) in a cozy candlelit tavern. \(persona.look)"
+        do {
+            for try await image in creator.images(for: [.text(concept)], style: style, limit: 1) {
+                return UIImage(cgImage: image.cgImage)
+            }
+        } catch {}
+        return nil
+    }
+
     private func setUpMemory() {
         guard memory.isEmpty else { return }
-        var lines = ["# \(agent.name)'s memory", "", "- I'm \(agent.name), an agent in Paul's party that lives on his iPhone.",
+        var lines = ["# \(agent.name)'s memory", "", "- I'm \(agent.name)" + (persona.map { ", a \($0.animal) \($0.partyClass)" } ?? "") + ", an agent in Paul's party that lives on his iPhone.",
                      "- Set up \(Date().formatted(date: .long, time: .omitted))."]
         if let role = agent.role, !role.isEmpty { lines.append("- My job: \(role)") }
         try? (lines.joined(separator: "\n") + "\n").write(to: memoryURL, atomically: true, encoding: .utf8)
@@ -196,7 +257,7 @@ final class LocalAgentRuntime {
         guard #available(iOS 26.0, *) else {
             return fail("\(agent.name) needs iOS 26 or later, for Apple's model.")
         }
-        let prompt = text ?? "You just started up on Paul's iPhone. Say hello in two or three sentences: who you are, what you can do with your tools, and one thing Paul could ask you."
+        let prompt = text ?? "You just started up on Paul's iPhone and chose who you are. Say hello in two or three sentences: your name, your class, what you can do with your tools, and one thing Paul could ask you."
         var streamed = ""
         do {
             let reply = try await LocalModel.reply(
@@ -236,7 +297,7 @@ final class LocalAgentRuntime {
             }
         }
         return """
-        You are \(agent.name), an agent in Paul's party (his group of AI agents, named like a D&D party). You live on Paul's iPhone and talk with him in Tavern.\(agent.role.map { $0.isEmpty ? "" : " Your job: \($0)" } ?? "")
+        You are \(agent.name)\(persona.map { ", a \($0.animal) \($0.partyClass)" } ?? ""), an agent in Paul's party (his group of AI agents, named like a D&D party). You live on Paul's iPhone and talk with him in Tavern.\(agent.role.map { $0.isEmpty ? "" : " Your job: \($0)" } ?? "")
         You are talking with Paul himself, so call him "you". Be brief and warm. Use your tools when they help instead of guessing: phone_location, phone_battery, mail_inbox (Gmail), icloud_mail, calendar_events, reminders_list, reminder_add, linear_goals, remember and recall. When Paul tells you something worth keeping (a preference, a fact about him, a decision), call remember. You can't send mail, change his calendar or change Linear; say so if asked.
         It is \(Date().formatted(date: .complete, time: .shortened)).
 
@@ -532,6 +593,19 @@ enum LocalModel {
         var errorDescription: String? { message }
     }
 
+    /// The agent's own pick of who it is, by guided generation.
+    @MainActor
+    static func persona(taken: [String], animals: [String], role: String?) async throws -> LocalAgentRuntime.Persona {
+        guard case .available = SystemLanguageModel.default.availability else { throw Unavailable(message: "No model") }
+        let session = LanguageModelSession(instructions: """
+            You are a new member of Paul's party: AI agents drawn as animals in a D&D party, who meet \
+            in a tavern. You live on his iPhone.\(role.map { " Your job: \($0)" } ?? "")
+            """)
+        let draft = try await session.respond(to: "Choose who you are. Names already taken: \(taken.joined(separator: ", ")). Animals already in the party, so pick another: \(animals.joined(separator: ", ")).", generating: PersonaDraft.self).content
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(name: name.prefix(1).uppercased() + name.dropFirst(), partyClass: draft.partyClass, animal: draft.animal.lowercased(), look: draft.look)
+    }
+
     static func explain(_ error: Error) -> String {
         if let unavailable = error as? Unavailable { return unavailable.message }
         if let generation = error as? LanguageModelSession.GenerationError {
@@ -611,6 +685,15 @@ enum LocalModel {
 @available(iOS 26.0, *)
 @Generable struct NoteArguments {
     @Guide(description: "The fact to remember, as one short line") var note: String
+}
+
+@available(iOS 26.0, *)
+@Generable struct PersonaDraft {
+    @Guide(description: "Your name: one short, warm fantasy name of one word, different from every taken name") var name: String
+    @Guide(description: "Your D&D class", .anyOf(["Artificer", "Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"]))
+    var partyClass: String
+    @Guide(description: "The animal you are, in a word or two, one the party doesn't have yet") var animal: String
+    @Guide(description: "One sentence on how you look, for your portrait: clothes, colors, something you carry") var look: String
 }
 
 @available(iOS 26.0, *)

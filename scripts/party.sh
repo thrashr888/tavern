@@ -15,7 +15,7 @@ for file in "$tavern_home"/portrait.{jpg,jpeg,png,heic}; do
   [ -f "$file" ] && { sips -s format jpeg -Z 1600 "$file" --out "$party/portrait.jpg" >/dev/null; break; }
 done
 # Goals on the phone needs the Linear team, and each member's name, color and owned projects.
-[ -f "$roster" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); p={k: r[k] for k in ("partyName", "lore", "spellbookStars", "linearTeam") if k in r}; p["members"]=[{k: m[k] for k in ("id", "name", "avatarColor", "owns", "partyClass") if k in m} for m in r.get("members", [])]; json.dump(p, open(sys.argv[2], "w"))' "$roster" "$party/party.json"
+[ -f "$roster" ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); p={k: r[k] for k in ("partyName", "lore", "spellbookStars", "linearTeam") if k in r}; p["members"]=[{k: m[k] for k in ("id", "name", "avatarColor", "owns", "partyClass", "animal") if k in m} for m in r.get("members", [])]; json.dump(p, open(sys.argv[2], "w"))' "$roster" "$party/party.json"
 # The Pi agents' hosts by tailnet name, for the phone to add itself.
 if [ -f "$party/party.json" ] && command -v tailscale >/dev/null; then
   tailscale status --json 2>/dev/null | python3 scripts/phone-hosts.py "$roster" "$party/party.json" || echo "No tailnet hosts for the phone" >&2

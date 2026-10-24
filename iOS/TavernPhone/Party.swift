@@ -33,6 +33,7 @@ enum Party {
         var avatarColor: String?
         var owns: [String]?
         var partyClass: String?
+        var animal: String?
     }
 
     /// The member an issue belongs to: its `agent:<id>` label (or assignee), else its project's owner.
@@ -52,9 +53,16 @@ enum Party {
     static let portrait: UIImage? = image(named: "portrait")
 
     private static var avatars: [String: UIImage?] = [:]
+    /// Portraits the phone's own agents drew themselves, by name.
+    private static var localAvatars: [String: UIImage] = [:]
 
-    /// avatars/<id>.jpg (or .png), loaded once.
+    static func setLocalAvatar(_ image: UIImage?, for name: String) {
+        localAvatars[name.lowercased()] = image
+    }
+
+    /// avatars/<id>.jpg (or .png), loaded once, or a phone agent's own portrait.
     static func avatar(_ id: String) -> UIImage? {
+        if let own = localAvatars[id] { return own }
         if let hit = avatars[id] { return hit }
         let found = image(named: "avatars/\(id)")
         avatars[id] = found

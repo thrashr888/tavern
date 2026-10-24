@@ -61,7 +61,7 @@ private struct AgentRow: View {
 
     private var status: String {
         if let dialog = session.dialog { return "Waiting on you: \(dialog.title)" }
-        return session.presence.label
+        return (agent.partyClass.map { "\($0) · " } ?? "") + session.presence.label
     }
 }
 
@@ -138,7 +138,7 @@ private struct AddAgentView: View {
                     }
                 }
                 Section {
-                    TextField("Name", text: $name)
+                    if kind == .host { TextField("Name", text: $name) }
                     if kind == .phone {
                         TextField("What it's for (optional)", text: $role, axis: .vertical).lineLimit(2...4)
                     } else {
@@ -146,10 +146,10 @@ private struct AddAgentView: View {
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
                 } footer: {
-                    if taken {
+                    if kind == .host, taken {
                         Text("Someone in the party already has that name.").foregroundStyle(.red)
                     } else if kind == .phone {
-                        Text("Runs on Apple's on-device model, so nothing leaves the phone except what its tools read. It can see where the phone is and its battery, read your inbox and Linear goals, and keeps its own memory on the phone. It sets itself up and says hello.")
+                        Text("Runs on Apple's on-device model, so nothing leaves the phone except what its tools read. It can see where the phone is, read your calendar, reminders, mail and Linear goals, and keeps its own memory on the phone. On its first start it picks its own name, class and look, and says hello.")
                     } else {
                         Text("The agent's durable host, reached over your tailnet. Tavern adds no access of its own.")
                     }
@@ -164,7 +164,7 @@ private struct AddAgentView: View {
                         switch kind {
                         case .phone:
                             let job = role.trimmingCharacters(in: .whitespacesAndNewlines)
-                            model.add(.onPhone(name: trimmedName, role: job.isEmpty ? nil : job))
+                            model.add(.onPhone(role: job.isEmpty ? nil : job))
                         case .host:
                             model.add(PhoneAgent(id: trimmedName.lowercased(), name: trimmedName, host: host.trimmingCharacters(in: .whitespaces), port: UInt16(port) ?? 19011))
                         }
@@ -177,7 +177,8 @@ private struct AddAgentView: View {
     }
 
     private var canAdd: Bool {
+        if kind == .phone { return true }
         guard !trimmedName.isEmpty, !taken else { return false }
-        return kind == .phone || (!host.trimmingCharacters(in: .whitespaces).isEmpty && UInt16(port) != nil)
+        return !host.trimmingCharacters(in: .whitespaces).isEmpty && UInt16(port) != nil
     }
 }

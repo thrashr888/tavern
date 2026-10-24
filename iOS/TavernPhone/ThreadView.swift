@@ -494,6 +494,7 @@ private struct AgentInfoSheet: View {
                         Avatar(name: agent.name, size: 56)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(agent.name).font(.title2.bold())
+                            if let partyClass = agent.partyClass { Text(partyClass).font(.subheadline).foregroundStyle(.secondary) }
                             HStack(spacing: 6) {
                                 PresenceDot(presence: session.presence, waiting: session.dialog != nil)
                                 Text(session.presence.label.capitalized).foregroundStyle(.secondary)

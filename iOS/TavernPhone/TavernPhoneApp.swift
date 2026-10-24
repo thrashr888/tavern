@@ -90,12 +90,15 @@ struct PhoneAgent: Codable, Equatable, Identifiable {
     var local: Bool?
     /// What a phone agent is for, in Paul's words, from Add to the party.
     var role: String?
+    /// A phone agent's D&D class, which it picks itself.
+    var partyClass: String?
 
     var isLocal: Bool { local == true }
     var endpoint: String { isLocal ? "This iPhone" : "\(host):\(port)" }
 
-    static func onPhone(name: String, role: String? = nil) -> PhoneAgent {
-        PhoneAgent(id: name.lowercased(), name: name, host: "", port: 0, local: true, role: role)
+    /// A new phone agent. Until its first start picks a name, it's "New agent"; its id is fixed.
+    static func onPhone(role: String? = nil) -> PhoneAgent {
+        PhoneAgent(id: "phone-" + UUID().uuidString.prefix(8).lowercased(), name: "New agent", host: "", port: 0, local: true, role: role)
     }
 }
 
@@ -145,7 +148,7 @@ final class PhoneModel: ObservableObject {
         if !UserDefaults.standard.bool(forKey: Self.setUpKey) {
             UserDefaults.standard.set(true, forKey: Self.setUpKey)
             if !agents.contains(where: \.isLocal) {
-                agents.insert(.onPhone(name: "Pip", role: "Paul's pocket helper: where he is, his battery, his inbox and Linear goals, and remembering things for him."), at: 0)
+                agents.insert(.onPhone(role: "Paul's pocket helper: where he is, his calendar and reminders, his mail and Linear goals, and remembering things for him."), at: 0)
             }
             save()
         }
@@ -203,7 +206,10 @@ final class PhoneModel: ObservableObject {
         guard let store, sessions[agent.id] == nil else { return }
         let session: PiAgentSession
         if agent.isLocal {
-            let runtime = LocalAgentRuntime.runtime(for: agent, reach: reach)
+            let runtime = LocalAgentRuntime.runtime(for: agent, reach: reach) { [weak self] persona in self?.chose(persona, id: agent.id) }
+            if agents.first(where: { $0.id == agent.id })?.name != runtime.agent.name, let persona = runtime.persona {
+                chose(persona, id: agent.id)
+            }
             session = PiAgentSession(agentID: agent.id, store: store) { LocalAgentTransport(runtime: runtime) }
         } else {
             session = PiAgentSession(agentID: agent.id, store: store) { PiTCPTransport(host: agent.host, port: agent.port) }
@@ -234,6 +240,14 @@ final class PhoneModel: ObservableObject {
             calendar: { [calendar] days in try await calendar.events(days: days) },
             reminders: { [calendar] in try await calendar.reminders() },
             addReminder: { [calendar] title, due in try await calendar.addReminder(title: title, due: due) })
+    }
+
+    /// A phone agent picked its name: the list and threads show it (the id stays).
+    private func chose(_ persona: LocalAgentRuntime.Persona, id: String) {
+        guard let index = agents.firstIndex(where: { $0.id == id }) else { return }
+        agents[index].name = persona.name
+        agents[index].partyClass = persona.partyClass
+        save()
     }
 
     func add(_ agent: PhoneAgent) {
