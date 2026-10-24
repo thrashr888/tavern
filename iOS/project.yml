@@ -13,7 +13,22 @@ targets:
   TavernPhone:
     type: application
     platform: iOS
-    sources: [TavernPhone]
+    sources:
+      - TavernPhone
+      # The party's art, lore and spellbook, copied in by scripts/phone.sh (personal; not in git).
+      - path: Party
+        type: folder
+        optional: true
+    # PAP's sign-in comes back to the app on this scheme when it runs in Safari.
+    info:
+      path: TavernPhone/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.thrashr888.tavern.phone
+            CFBundleURLSchemes: [dev.thrashr888.tavern.phone]
+        # The phone agents' heartbeat (BGAppRefreshTask): checks mail while the app is closed.
+        BGTaskSchedulerPermittedIdentifiers: [dev.thrashr888.tavern.phone.heartbeat]
+        UIBackgroundModes: [fetch]
     dependencies:
       - package: Tavern
         product: TavernCore
@@ -29,5 +44,15 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # Hosts are tailnet or loopback addresses: plain TCP, no TLS of their own.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Tavern talks to your Pi agents' hosts on your network.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Your agents can ask where you are; you approve each time.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Tavern listens while you dictate a message.
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: Your phone agents can read your calendar when you ask them about your day.
+        INFOPLIST_KEY_NSRemindersFullAccessUsageDescription: Your phone agents can read your reminders and add new ones when you ask.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Tavern turns your dictation into text, on the iPhone when it can.
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 5T4QSYSNP2
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UIRequiresFullScreen: YES

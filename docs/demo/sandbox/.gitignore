@@ -1,0 +1,5 @@
+# The agent's own settings, memory and the host's files, not the project
+.pi/
+.cortex/
+host.log
+requests.json

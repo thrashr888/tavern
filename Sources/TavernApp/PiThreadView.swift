@@ -395,8 +395,19 @@ struct MarkdownText: View {
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 3) }
         case .table(let source):
+            let rows = MarkdownBlock.tableRows(source)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(source).font(.system(.callout, design: .monospaced)).padding(10)
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                        GridRow {
+                            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                                Text(TranscriptRow.markdown(cell)).fontWeight(index == 0 ? .semibold : .regular)
+                            }
+                        }
+                        if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                    }
+                }
+                .padding(10)
             }
             .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
         case .rule:
