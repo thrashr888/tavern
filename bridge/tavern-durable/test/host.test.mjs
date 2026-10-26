@@ -273,3 +273,50 @@ test("ask puts a select or input question to Tavern and returns the answer", asy
     host.kill();
   }
 });
+
+test("checks run on their own timer and hand new mail to the agent", async () => {
+  const port = 19990 + Math.floor(Math.random() * 9);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-pickup-"));
+  const mail = path.join(dir, "mail.json");
+  fs.writeFileSync(mail, JSON.stringify([{ id: "m1", values: { subject: "Old news" } }]));
+  fs.mkdirSync(path.join(dir, ".pi"));
+  fs.writeFileSync(path.join(dir, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { pap: { command: process.execPath, args: [here("./fake-pap.mjs")], env: { FAKE_PAP_MAIL: mail } } } }));
+  fs.writeFileSync(path.join(dir, "heartbeat.json"), JSON.stringify({ checks: [
+    { name: "mail", server: "pap", tool: "read", arguments: { connection: "Google", tool: "emails_list", params: {} } },
+  ] }));
+  let stderr = "";
+  const host = spawn(process.execPath, [here("../host.mjs")], {
+    env: {
+      ...process.env,
+      TAVERN_DURABLE_JUDGE: "off",
+      TAVERN_DURABLE_RUNTIME: here("./fake-runtime.mjs"),
+      TAVERN_DURABLE_PORT: String(port),
+      TAVERN_DURABLE_REQUESTS: path.join(dir, "requests.json"),
+      TAVERN_DURABLE_STATE: path.join(dir, "state"),
+      TAVERN_DURABLE_HEARTBEAT_MINUTES: "0",
+      TAVERN_DURABLE_CHECK_MINUTES: "0.005",
+      AGENT_CWD: dir,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  host.stderr.on("data", (d) => (stderr += d));
+  const until = async (predicate) => {
+    for (let i = 0; i < 500; i++) {
+      if (predicate()) return;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`timed out: ${stderr.slice(-500)}`);
+  };
+  try {
+    await until(() => stderr.includes("checks every"));
+    const state = path.join(dir, ".heartbeat-state.json");
+    await until(() => fs.existsSync(state)); // the first check only learns what's there
+    fs.writeFileSync(mail, JSON.stringify([{ id: "m2", values: { subject: "Deploy is done", from: "Rook" } }, { id: "m1" }]));
+    await until(() => stderr.includes("picked up 1: mail:m2"));
+    await until(() => JSON.parse(fs.readFileSync(state, "utf8")).checks.mail.seen.includes("m2"));
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(stderr.match(/picked up/g).length, 1, "handed over once");
+  } finally {
+    host.kill();
+  }
+});
