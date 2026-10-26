@@ -50,6 +50,8 @@ const SECRET_PATHS = [
   /(^|\/)\.?heartbeat(-state|-schedule)?\.json$/i, // any case: macOS paths ignore it
   // What Paul said to always allow, and the host's state it lives in: the agent can't add to it unasked.
   /(^|\/)always-allow\.json$/i,
+  // Who tools/mail.mjs may send to: widening it needs Paul.
+  /(^|\/)mail-allow\.json$/i,
   /(^|\/)\.local\/state\/tavern-durable(\/|$)/i,
   ...(process.env.TAVERN_DURABLE_STATE ? [new RegExp(`(^|/)${process.env.TAVERN_DURABLE_STATE.replace(/^\/+|\/+$/g, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`, "i")] : []),
 ];
