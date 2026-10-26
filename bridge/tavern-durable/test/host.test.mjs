@@ -274,17 +274,16 @@ test("ask puts a select or input question to Tavern and returns the answer", asy
   }
 });
 
-test("checks run on their own timer and hand new mail to the agent", async () => {
-  const port = 19990 + Math.floor(Math.random() * 9);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-pickup-"));
-  const mail = path.join(dir, "mail.json");
-  fs.writeFileSync(mail, JSON.stringify([{ id: "m1", values: { subject: "Old news" } }]));
-  fs.mkdirSync(path.join(dir, ".pi"));
-  fs.writeFileSync(path.join(dir, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { pap: { command: process.execPath, args: [here("./fake-pap.mjs")], env: { FAKE_PAP_MAIL: mail } } } }));
+/** A host with a fake PAP mailbox and the check timer on (beat off); `mail(records)` rewrites the mailbox. */
+async function pickupHost(dir, env = {}) {
+  const port = 20000 + Math.floor(Math.random() * 500);
+  const mailFile = path.join(dir, "mail.json");
+  if (!fs.existsSync(mailFile)) fs.writeFileSync(mailFile, JSON.stringify([{ id: "m1", values: { subject: "Old news" } }]));
+  fs.mkdirSync(path.join(dir, ".pi"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { pap: { command: process.execPath, args: [here("./fake-pap.mjs")], env: { FAKE_PAP_MAIL: mailFile } } } }));
   fs.writeFileSync(path.join(dir, "heartbeat.json"), JSON.stringify({ checks: [
     { name: "mail", server: "pap", tool: "read", arguments: { connection: "Google", tool: "emails_list", params: {} } },
   ] }));
-  let stderr = "";
   const host = spawn(process.execPath, [here("../host.mjs")], {
     env: {
       ...process.env,
@@ -296,27 +295,107 @@ test("checks run on their own timer and hand new mail to the agent", async () =>
       TAVERN_DURABLE_HEARTBEAT_MINUTES: "0",
       TAVERN_DURABLE_CHECK_MINUTES: "0.005",
       AGENT_CWD: dir,
+      ...env,
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
-  host.stderr.on("data", (d) => (stderr += d));
-  const until = async (predicate) => {
-    for (let i = 0; i < 500; i++) {
+  const h = { host, port, stderr: "", state: path.join(dir, ".heartbeat-state.json") };
+  host.stderr.on("data", (d) => (h.stderr += d));
+  h.until = async (predicate) => {
+    for (let i = 0; i < 800; i++) {
       if (predicate()) return;
       await new Promise((r) => setTimeout(r, 10));
     }
-    throw new Error(`timed out: ${stderr.slice(-500)}`);
+    throw new Error(`timed out: ${h.stderr.slice(-800)}`);
   };
+  h.mail = (records) => fs.writeFileSync(mailFile, JSON.stringify(records));
+  h.seen = () => (fs.existsSync(h.state) ? JSON.parse(fs.readFileSync(h.state, "utf8")).checks.mail.seen : []);
+  h.rpc = async (command) => {
+    const socket = net.connect(port, "127.0.0.1");
+    let buffer = "";
+    const answer = new Promise((resolve) => socket.on("data", (chunk) => {
+      buffer += chunk;
+      for (const line of buffer.split("\n").slice(0, -1)) {
+        const record = JSON.parse(line);
+        if (record.id === command.id) resolve(record);
+      }
+    }));
+    socket.write(JSON.stringify(command) + "\n");
+    const record = await answer;
+    socket.destroy();
+    return record;
+  };
+  await h.until(() => h.stderr.includes("listening") && h.stderr.includes("checks every"));
+  return h;
+}
+
+const count = (text, pattern) => (text.match(pattern) ?? []).length;
+
+test("checks run on their own timer, show in get_state, and hand new mail over once, even after a restart", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-pickup-"));
+  let h = await pickupHost(dir);
   try {
-    await until(() => stderr.includes("checks every"));
-    const state = path.join(dir, ".heartbeat-state.json");
-    await until(() => fs.existsSync(state)); // the first check only learns what's there
-    fs.writeFileSync(mail, JSON.stringify([{ id: "m2", values: { subject: "Deploy is done", from: "Rook" } }, { id: "m1" }]));
-    await until(() => stderr.includes("picked up 1: mail:m2"));
-    await until(() => JSON.parse(fs.readFileSync(state, "utf8")).checks.mail.seen.includes("m2"));
-    await new Promise((r) => setTimeout(r, 700));
-    assert.equal(stderr.match(/picked up/g).length, 1, "handed over once");
+    await h.until(() => fs.existsSync(h.state)); // the first check only learns what's there
+    const state = await h.rpc({ id: "s1", type: "get_state" });
+    assert.equal(state.data.heartbeat.everyMinutes, 0, "beat off");
+    assert.equal(state.data.heartbeat.checks.everyMinutes, 0.005, "check timer visible with the beat off");
+    h.mail([{ id: "m2", values: { subject: "Deploy is done", from: "Rook" } }, { id: "m1" }]);
+    await h.until(() => h.stderr.includes("handed over 1: mail:m2"));
+    await h.until(() => h.seen().includes("m2"));
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(count(h.stderr, /handed over 1:/g), 1, "handed over once");
   } finally {
-    host.kill();
+    h.host.kill();
+  }
+  // A restart reads the saved state: nothing is handed over again.
+  h = await pickupHost(dir);
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(count(h.stderr, /handing over/g), 0, h.stderr);
+  } finally {
+    h.host.kill();
+  }
+});
+
+test("new mail is handed over while the agent is busy, not skipped", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-busy-"));
+  const h = await pickupHost(dir, { FAKE_RUNTIME_STEP_MS: "600" });
+  try {
+    await h.until(() => fs.existsSync(h.state));
+    const started = await h.rpc({ id: "p1", type: "prompt", message: "long task", requestId: "p1" });
+    assert.equal(started.data.disposition, "started");
+    h.mail([{ id: "m2", values: { subject: "While busy" } }, { id: "m1" }]);
+    await h.until(() => h.stderr.includes("handing over 1 (agent busy, queued): mail:m2"));
+    await h.until(() => h.seen().includes("m2"));
+  } finally {
+    h.host.kill();
+  }
+});
+
+test("a failed hand-off leaves the mail unseen, and the next check hands it over", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-fail-"));
+  const h = await pickupHost(dir, { FAKE_RUNTIME_FAIL: "Retry me" });
+  try {
+    await h.until(() => fs.existsSync(h.state));
+    h.mail([{ id: "m2", values: { subject: "Retry me" } }, { id: "m1" }]);
+    await h.until(() => h.stderr.includes("checks failed: submit failed"));
+    assert.ok(!h.seen().includes("m2"), "not marked seen after the failure");
+    await h.until(() => h.stderr.includes("handed over 1: mail:m2"));
+    await h.until(() => h.seen().includes("m2"));
+  } finally {
+    h.host.kill();
+  }
+});
+
+test("an empty event is refused without using up its request id", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tavern-durable-event-"));
+  const h = await pickupHost(dir);
+  try {
+    assert.equal((await h.rpc({ id: "x1", type: "event", source: "mail", text: " ", requestId: "ev1" })).success, false);
+    const ok = await h.rpc({ id: "x2", type: "event", source: "mail", text: "Rook wrote", requestId: "ev1" });
+    assert.equal(ok.success, true);
+    assert.notEqual(ok.data.disposition, "duplicate");
+  } finally {
+    h.host.kill();
   }
 });

@@ -198,10 +198,11 @@ async function handle(socket, line) {
       case "event": {
         // Something happened outside (new mail, a webhook, a cron job): hand it to the agent as a
         // follow-up, once per requestId.
-        if (!requests.claim(command.requestId)) return reply(true, { disposition: "duplicate" });
+        // Validated before the id is claimed, so a bad event doesn't use up its id.
         const source = String(command.source ?? "event").slice(0, 60);
         const text = String(command.text ?? "").slice(0, 8000);
         if (!text.trim()) return reply(false, undefined, "event needs text");
+        if (!requests.claim(command.requestId)) return reply(true, { disposition: "duplicate" });
         const busy = liveOf(current).busy;
         background(submit(`[Event from ${source}]\n${text}`, "followUp"));
         return reply(true, { disposition: busy ? "queued" : "started" });
@@ -275,7 +276,8 @@ function heartbeatPrompt() {
 
 function heartbeatState() {
   const hasChecks = loadChecks(AGENT_CWD) != null;
-  if (heartbeatMinutes <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
+  // The check timer keeps running with the beat off, so it still shows.
+  if ((heartbeatMinutes <= 0 && !(hasChecks && CHECK_MINUTES > 0)) || (!heartbeatPrompt() && !hasChecks)) return null;
   return { everyMinutes: heartbeatMinutes, last: lastHeartbeat, next: nextHeartbeat,
            checks: hasChecks ? { everyMinutes: CHECK_MINUTES || heartbeatMinutes, last: lastCheck, found: lastFound, errors: lastCheckErrors, week: beatsThisWeek(BEATS_LOG) } : null };
 }
@@ -310,8 +312,13 @@ function runChecks(checks, prompt) {
     if (errors.length) log(`heartbeat checks: ${errors.map((e) => `${e.check}: ${e.error}`).join("; ")}`);
     if (found.length) {
       lastHeartbeat = lastCheck;
+      const busy = liveOf(view.current()).busy;
+      const ids = found.map((f) => `${f.check}:${f.id}`).join(", ").slice(0, 500);
+      log(`handing over ${found.length}${busy ? " (agent busy, queued)" : ""}: ${ids}`);
+      // controller.submit may resolve only once the turn is done, so a crash before save() hands
+      // these over again after a restart: delivery is at least once, never silently dropped.
       await submit(wakeMessage(found, prompt, lastCheck), "followUp");
-      log(`picked up ${found.length}: ${found.map((f) => `${f.check}:${f.id}`).join(", ").slice(0, 500)}`);
+      log(`handed over ${found.length}: ${ids}`);
     }
     save();
   })().catch((error) => log(`checks failed: ${error?.message ?? error}`)).finally(() => { checking = null; });

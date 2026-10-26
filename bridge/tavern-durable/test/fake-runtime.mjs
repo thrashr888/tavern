@@ -13,7 +13,11 @@ export async function openDurable({ cwd, extensions = [] }) {
   let notices = [];
   const current = () => ({ session: { id: "durable-1", cwd }, conversation: { entries, docs: { "pi.live": live } }, notices });
   const emit = () => setImmediate(() => listeners.forEach((l) => l()));
-  const step = (ms) => new Promise((r) => setTimeout(r, ms));
+  // FAKE_RUNTIME_STEP_MS slows each turn (to hold the agent busy); FAKE_RUNTIME_FAIL fails the first
+  // submit whose text contains it, before anything is recorded.
+  const stepMs = Number(process.env.FAKE_RUNTIME_STEP_MS ?? 20);
+  const step = (ms) => new Promise((r) => setTimeout(r, ms === 20 ? stepMs : ms));
+  let failNext = process.env.FAKE_RUNTIME_FAIL ?? null;
   let next = 3;
   const memos = new Map();
   const apiFor = (taskId) => ({
@@ -59,6 +63,10 @@ export async function openDurable({ cwd, extensions = [] }) {
     view: { current, subscribe: (l) => (listeners.add(l), () => listeners.delete(l)) },
     controller: {
       async submit(text) {
+        if (failNext && text.includes(failNext)) {
+          failNext = null;
+          throw new Error("submit failed");
+        }
         entries = [...entries, { id: `e${next++}`, timestamp: Date.now(), message: { role: "user", content: text } }];
         live = { generation: { message: { role: "assistant", content: [{ type: "thinking", thinking: "Let me" }] } } };
         emit(); await step(20);
