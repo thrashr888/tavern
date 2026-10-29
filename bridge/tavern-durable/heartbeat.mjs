@@ -111,9 +111,10 @@ export class HeartbeatChecks {
 
   /**
    * Runs every check. Returns the new records, per-check errors and how many each listed; remembers them as seen
-   * unless `dryRun`. A check's first run only learns what's there.
+   * unless `dryRun`. A check's first run only learns what's there. With `defer`, nothing is remembered until the
+   * caller calls the returned `save()`, so a record is marked seen only once it has reached the agent.
    */
-  async run({ dryRun = false } = {}) {
+  async run({ dryRun = false, defer = false } = {}) {
     const state = this.#state();
     const found = [];
     const errors = [];
@@ -152,8 +153,9 @@ export class HeartbeatChecks {
       const server = this.#servers.find((s) => s.name === name);
       await server.request("tools/call", { name: "finish_task", arguments: { task } }).catch(() => {});
     }
-    if (!dryRun) fs.writeFileSync(this.#statePath, JSON.stringify(state));
-    return { found, errors, listed };
+    const save = () => { if (!dryRun) fs.writeFileSync(this.#statePath, JSON.stringify(state)); };
+    if (!defer) save();
+    return { found, errors, listed, save };
   }
 }
 

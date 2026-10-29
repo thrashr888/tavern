@@ -40,6 +40,9 @@ const DEBUG = process.env.TAVERN_DURABLE_DEBUG === "1";
 // The agent can change it (heartbeat_set, after Paul allows it); its choice is kept in heartbeat-schedule.json.
 let heartbeatMinutes = savedMinutes(AGENT_CWD, Number(process.env.TAVERN_DURABLE_HEARTBEAT_MINUTES ?? 30));
 const HEARTBEAT_FILE = path.join(AGENT_CWD, "HEARTBEAT.md");
+// Pickup: with heartbeat.json, run its checks every N minutes on their own timer, between beats,
+// so new mail and issues reach the agent in minutes. 0 (default) runs them only on the beat.
+const CHECK_MINUTES = Number(process.env.TAVERN_DURABLE_CHECK_MINUTES ?? 0);
 // Risky tool calls wait for Paul: "risky" (default), "all" or "off". See approvals.mjs.
 const APPROVALS = process.env.TAVERN_DURABLE_APPROVALS ?? "risky";
 // Standard Pi packages load into the session: the agent's own (<AGENT_CWD>/.pi), "all" adds the
@@ -195,10 +198,11 @@ async function handle(socket, line) {
       case "event": {
         // Something happened outside (new mail, a webhook, a cron job): hand it to the agent as a
         // follow-up, once per requestId.
-        if (!requests.claim(command.requestId)) return reply(true, { disposition: "duplicate" });
+        // Validated before the id is claimed, so a bad event doesn't use up its id.
         const source = String(command.source ?? "event").slice(0, 60);
         const text = String(command.text ?? "").slice(0, 8000);
         if (!text.trim()) return reply(false, undefined, "event needs text");
+        if (!requests.claim(command.requestId)) return reply(true, { disposition: "duplicate" });
         const busy = liveOf(current).busy;
         background(submit(`[Event from ${source}]\n${text}`, "followUp"));
         return reply(true, { disposition: busy ? "queued" : "started" });
@@ -272,32 +276,61 @@ function heartbeatPrompt() {
 
 function heartbeatState() {
   const hasChecks = loadChecks(AGENT_CWD) != null;
-  if (heartbeatMinutes <= 0 || (!heartbeatPrompt() && !hasChecks)) return null;
+  // The check timer keeps running with the beat off, so it still shows.
+  if ((heartbeatMinutes <= 0 && !(hasChecks && CHECK_MINUTES > 0)) || (!heartbeatPrompt() && !hasChecks)) return null;
   return { everyMinutes: heartbeatMinutes, last: lastHeartbeat, next: nextHeartbeat,
-           checks: hasChecks ? { last: lastCheck, found: lastFound, errors: lastCheckErrors, week: beatsThisWeek(BEATS_LOG) } : null };
+           checks: hasChecks ? { everyMinutes: CHECK_MINUTES || heartbeatMinutes, last: lastCheck, found: lastFound, errors: lastCheckErrors, week: beatsThisWeek(BEATS_LOG) } : null };
 }
 
 /** One beat: checks first when configured (waking the agent only for new items), else the prompt. */
 async function heartbeat() {
-  if (liveOf(view.current()).busy) return; // next beat; nothing is marked seen meanwhile
   const prompt = heartbeatPrompt();
   const checks = heartbeatChecks();
   if (!checks) {
-    if (!prompt) return;
+    if (!prompt || liveOf(view.current()).busy) return; // skip this beat while busy
     lastHeartbeat = new Date().toISOString();
     background(submit(`[Heartbeat ${lastHeartbeat}]\n${prompt}`, "followUp"));
     return;
   }
-  const { found, errors } = await checks.run();
-  lastCheck = new Date().toISOString();
-  lastFound = found.length;
-  lastCheckErrors = errors;
-  if (!errors.length || found.length) recordBeat(BEATS_LOG, found.length);
-  if (errors.length) log(`heartbeat checks: ${errors.map((e) => `${e.check}: ${e.error}`).join("; ")}`);
-  if (found.length && !liveOf(view.current()).busy) {
-    lastHeartbeat = lastCheck;
-    background(submit(wakeMessage(found, prompt, lastCheck), "followUp"));
-  }
+  runChecks(checks, prompt);
+}
+
+let checking = null; // the check (and its hand-off) in flight; the next one waits its turn
+/**
+ * Runs the checks and hands anything new to the agent as a follow-up (Durable queues it while the
+ * agent is busy). Records are marked seen only after the hand-off, so a failed submit finds them
+ * again next time instead of losing them.
+ */
+function runChecks(checks, prompt) {
+  if (checking) return checking;
+  checking = (async () => {
+    const { found, errors, save } = await checks.run({ defer: true });
+    lastCheck = new Date().toISOString();
+    lastFound = found.length;
+    lastCheckErrors = errors;
+    if (!errors.length || found.length) recordBeat(BEATS_LOG, found.length);
+    if (errors.length) log(`heartbeat checks: ${errors.map((e) => `${e.check}: ${e.error}`).join("; ")}`);
+    if (found.length) {
+      lastHeartbeat = lastCheck;
+      const busy = liveOf(view.current()).busy;
+      const ids = found.map((f) => `${f.check}:${f.id}`).join(", ").slice(0, 500);
+      log(`handing over ${found.length}${busy ? " (agent busy, queued)" : ""}: ${ids}`);
+      // controller.submit may resolve only once the turn is done, so a crash before save() hands
+      // these over again after a restart: delivery is at least once, never silently dropped.
+      await submit(wakeMessage(found, prompt, lastCheck), "followUp");
+      log(`handed over ${found.length}: ${ids}`);
+    }
+    save();
+  })().catch((error) => log(`checks failed: ${error?.message ?? error}`)).finally(() => { checking = null; });
+  return checking;
+}
+
+if (CHECK_MINUTES > 0) {
+  setInterval(() => {
+    const checks = heartbeatChecks();
+    if (checks) runChecks(checks, heartbeatPrompt());
+  }, CHECK_MINUTES * 60_000).unref();
+  log(`checks every ${CHECK_MINUTES} min`);
 }
 
 let heartbeatTimer = null;
