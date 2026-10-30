@@ -33,6 +33,10 @@ public final class PiAgentSession: ObservableObject {
     @Published public internal(set) var reactions: [String: [Reaction]] = [:]
     private let makeTransport: () throws -> PiTransport
     private var client: PiClient?
+    /// Tools this client lends the agent (a durable host's `lend_tools`), and what answers them.
+    /// The phone sets these; the Mac lends nothing.
+    public var lentTools: [String] = []
+    public var lentToolHandler: (@MainActor (_ tool: String, _ arguments: JSONValue) async throws -> JSONValue)?
     private var listener: Task<Void, Never>?
 
     @Published public private(set) var presence: Presence = .disconnected
@@ -133,6 +137,8 @@ public final class PiAgentSession: ObservableObject {
             let state = try await client.send(.getState)
             config = PiAgentConfig(state: state.data)
             presence = state.data?["isStreaming"]?.boolValue == true ? .working : .idle
+            // Only durable hosts know lend_tools; a plain `pi --mode rpc` would reject it.
+            if config.durable, !lentTools.isEmpty { _ = try? await client.request(.lendTools(lentTools)) }
             attempts = 0
             lastConnectError = nil
             try await sync()
@@ -396,6 +402,22 @@ public final class PiAgentSession: ObservableObject {
 
     // MARK: - Events
 
+    /// Answers a host's call to a tool this client lends, with its result or what went wrong.
+    private func answerLentTool(_ raw: JSONValue) {
+        guard let id = raw["id"]?.stringValue, let tool = raw["tool"]?.stringValue, let client else { return }
+        let arguments = raw["arguments"] ?? .object([:])
+        Task { @MainActor in
+            var record: [String: JSONValue] = ["type": "lent_tool_response", "id": .string(id)]
+            do {
+                guard let handler = lentToolHandler, lentTools.contains(tool) else { throw PiClientError.disconnected }
+                record["result"] = try await handler(tool, arguments)
+            } catch {
+                record["error"] = .string((error as? LocalizedError)?.errorDescription ?? "\(error)")
+            }
+            try? await client.reply(.object(record))
+        }
+    }
+
     private func listen(to client: PiClient) {
         listener = Task { [weak self] in
             for await record in client.records {
@@ -417,6 +439,8 @@ public final class PiAgentSession: ObservableObject {
             }
         case .response:
             break
+        case .event("lent_tool_request", let raw):
+            answerLentTool(raw)
         case .event(let type, let raw):
             switch type {
             case "agent_start":

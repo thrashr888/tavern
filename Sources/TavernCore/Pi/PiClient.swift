@@ -71,6 +71,11 @@ public actor PiClient {
         try transport.send(try answer.json(dialogID: dialog.id).encoded())
     }
 
+    /// One record that isn't a command: the answer to a host's request (a lent tool's result).
+    public func reply(_ record: JSONValue) throws {
+        try transport.send(try record.encoded())
+    }
+
     public func close() {
         transport.close()
     }
