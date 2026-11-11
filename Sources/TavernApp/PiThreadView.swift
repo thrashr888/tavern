@@ -789,12 +789,16 @@ struct DialogBanner: View {
             switch dialog.method {
             case .confirm where dialog.isApproval:
                 // No default key: Return shouldn't run a risky command.
+                if let scope = dialog.alwaysScopeNotice {
+                    Text(scope).tavernFont(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     Spacer()
                     Button("Deny") { onAnswer(.confirmed(false)) }.controlSize(.large)
                     if let always = dialog.alwaysLabel {
                         Button(always) { onAnswer(.alwaysAllow) }.controlSize(.large)
-                            .help("Allow this, and don't ask again. Undo it in the agent's About tab.")
+                            .help(dialog.alwaysScopeNotice ?? "Remove this permission in the agent's About tab.")
                     }
                     Button("Allow") { onAnswer(.confirmed(true)) }.buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
                 }

@@ -233,6 +233,183 @@ final class ProjectChatReliabilityTests: XCTestCase {
         await party.disconnect()
     }
 
+    // Peter F5: a real connection/session replacement, with the accepted prompt retained
+    // but no terminal result. Another chat shares the same recipient queue.
+    func testRestartWithRetainedPromptBlocksOnlyRecipientUntilManualReview() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        let otherID = try XCTUnwrap(model.create(title: "Other project", participants: ["a", "b"], lead: "a"))
+        let other = try XCTUnwrap(model.chats.first { $0.id == otherID })
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "accepted-before-host-restart"))
+        try await eventually { model.messages.contains { $0.text == "accepted-before-host-restart" && $0.state == .waiting } }
+        assertTrue(await model.send(chat: other, recipient: "a", text: "cross-project-successor"))
+        party.hosts["a"]!.restartRetainingHistory()
+        await party.sessions["a"]!.reconnectNow()
+        try await eventually { model.messages.contains { $0.text == "accepted-before-host-restart" && $0.state == .uncertain } }
+        XCTAssertTrue(party.sessions["a"]!.transcript.contains { $0.role == .user })
+        assertTrue(await model.send(chat: chat, recipient: "b", text: "independent-recipient"))
+        try await eventually { party.hosts["b"]!.prompts.count == 1 }
+        party.hosts["b"]!.complete("unblocked recipient completed")
+        try await eventually { model.messages.contains { $0.text == "independent-recipient" && $0.state == .replied } }
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 1)
+        XCTAssertTrue(model.messages.contains { $0.text == "cross-project-successor" && $0.state == .queued })
+        model.closeAttempt(try XCTUnwrap(model.messages.first { $0.text == "accepted-before-host-restart" }))
+        try await eventually { party.hosts["a"]!.prompts.count == 2 }
+        party.hosts["a"]!.complete("manually released successor")
+        try await eventually { model.messages.contains { $0.text == "cross-project-successor" && $0.state == .replied } }
+        XCTAssertEqual(party.hosts["a"]!.prompts.filter { $0.hasSuffix("accepted-before-host-restart") }.count, 1)
+        await party.disconnect()
+    }
+
+    // Peter F6/F7 absent-result branch: loss after the transport call but before host commit
+    // is still unknown to the client and must not turn into a resend after reconnect.
+    func testHostRestartBeforePromptCommitNeverReplaysUnknownAttempt() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        party.hosts["a"]!.dropNextPromptBeforeAccept = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "lost-before-host-commit"))
+        try await eventually { model.messages.contains { $0.text == "lost-before-host-commit" && $0.state == .uncertain } }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "after-unknown-commit"))
+        party.hosts["a"]!.restartWithoutHistory()
+        await party.sessions["a"]!.reconnectNow()
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertEqual(party.hosts["a"]!.promptAttempts, 1)
+        XCTAssertTrue(party.hosts["a"]!.prompts.isEmpty)
+        XCTAssertTrue(model.messages.contains { $0.text == "after-unknown-commit" && $0.state == .queued })
+        model.closeAttempt(try XCTUnwrap(model.messages.first { $0.text == "lost-before-host-commit" }))
+        try await eventually { party.hosts["a"]!.prompts.count == 1 }
+        XCTAssertTrue(party.hosts["a"]!.prompts[0].hasSuffix("after-unknown-commit"))
+        party.hosts["a"]!.complete("successor after human review")
+        try await eventually { model.messages.contains { $0.text == "after-unknown-commit" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    // Peter F7 present-result branch: a restarted host retains the accepted prompt and answer.
+    func testUncertainReplySurvivesHostSessionReplacementWithoutResend() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        party.hosts["a"]!.loseAcknowledgement = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "uncertain-before-host-restart"))
+        try await eventually { model.messages.contains { $0.text == "uncertain-before-host-restart" && $0.state == .uncertain } }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "after-recovered-host-reply"))
+        party.hosts["a"]!.complete("answer persisted before restart", notify: false)
+        party.hosts["a"]!.restartRetainingHistory()
+        await party.sessions["a"]!.reconnectNow()
+        try await eventually { party.hosts["a"]!.prompts.count == 2 }
+        XCTAssertEqual(model.messages.filter { $0.text == "answer persisted before restart" }.count, 1)
+        XCTAssertTrue(model.messages.contains { $0.text == "uncertain-before-host-restart" && $0.state == .replied })
+        party.hosts["a"]!.complete("successor completed")
+        try await eventually { model.messages.contains { $0.text == "after-recovered-host-reply" && $0.state == .replied } }
+        try await party.sessions["a"]!.sync()
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 2)
+        XCTAssertEqual(model.messages.filter { $0.text == "answer persisted before restart" }.count, 1)
+        await party.disconnect()
+    }
+
+    // Peter F8: interruption changes tracking, not routing receipt or attempt accounting.
+    func testRestartDuringHandoffRetainsReservationAndDoesNotReplay() async throws {
+        let (_, party, model, original) = try fixture()
+        model.setCoordination(original, true)
+        let chat = try XCTUnwrap(model.chats.first { $0.id == original.id })
+        await party.connect()
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "handoff-before-host-restart"))
+        try await eventually { party.hosts["a"]!.prompts.count == 1 }
+        party.hosts["a"]!.complete("@ask b: interrupted handoff")
+        try await eventually { party.hosts["b"]!.prompts.count == 1 }
+        party.hosts["b"]!.restartWithoutHistory()
+        await party.sessions["b"]!.reconnectNow()
+        try await eventually { model.messages.contains { $0.parentMessageID != nil && $0.recipient == "b" && $0.state == .uncertain } }
+        let handoff = try XCTUnwrap(model.messages.first { $0.parentMessageID != nil && $0.recipient == "b" })
+        try await party.sessions["a"]!.sync()
+        XCTAssertEqual(party.hosts["b"]!.prompts.count, 1)
+        model.closeAttempt(handoff)
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertEqual(party.hosts["b"]!.prompts.count, 1)
+        XCTAssertEqual(model.messages.filter { $0.rootRequestID == handoff.rootRequestID && $0.parentMessageID != nil && $0.recipient != nil }.count, 1)
+        XCTAssertEqual(model.messages.first { $0.id == handoff.id }?.state, .closed)
+        await party.disconnect()
+    }
+
+    // Peter F14: unanswered consent is intentionally human-gated, but isolated to one recipient.
+    func testUnansweredApprovalBlocksRecipientWithoutBlockingOtherAgents() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "approval-paused"))
+        try await eventually { party.hosts["a"]!.prompts.count == 1 }
+        party.hosts["a"]!.approval()
+        try await eventually { party.sessions["a"]!.dialog != nil }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "behind-approval"))
+        assertTrue(await model.send(chat: chat, recipient: "b", text: "while-a-needs-consent"))
+        try await eventually { party.hosts["b"]!.prompts.count == 1 }
+        party.hosts["b"]!.complete("b continues independently")
+        try await eventually { model.messages.contains { $0.text == "while-a-needs-consent" && $0.state == .replied } }
+        XCTAssertTrue(party.hosts["a"]!.approvalAnswers.isEmpty)
+        XCTAssertNotNil(party.sessions["a"]!.dialog)
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 1)
+        XCTAssertTrue(model.messages.contains { $0.text == "behind-approval" && $0.state == .queued })
+        await party.sessions["a"]!.answer(.confirmed(false))
+        try await eventually { party.hosts["a"]!.prompts.count == 2 }
+        party.hosts["a"]!.complete("after human declined")
+        try await eventually { model.messages.contains { $0.text == "behind-approval" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    func testDenialWithNormalFinalReplyIsRepliedNotWorkSuccess() async throws {
+        try await verifyDenialReply(includesFailedTool: false)
+    }
+
+    func testDeniedToolFollowedByFinalReplyUsesVisibleReplyOutcome() async throws {
+        try await verifyDenialReply(includesFailedTool: true)
+    }
+
+    private func verifyDenialReply(includesFailedTool: Bool) async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        party.hosts["a"]!.denialIncludesFailedTool = includesFailedTool
+        party.hosts["a"]!.denialFinalReply = "I could not perform the operation because permission was declined."
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "denied-with-final-response"))
+        try await eventually { party.hosts["a"]!.prompts.count == 1 }
+        party.hosts["a"]!.approval()
+        try await eventually { party.sessions["a"]!.dialog != nil }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "after-refusal-response"))
+        await party.sessions["a"]!.answer(.confirmed(false))
+        try await eventually { party.hosts["a"]!.prompts.count == 2 }
+        XCTAssertEqual(party.hosts["a"]!.approvalAnswers, [false])
+        let request = try XCTUnwrap(model.messages.first { $0.text == "denied-with-final-response" })
+        XCTAssertEqual(request.state, .replied)
+        XCTAssertNil(request.failureReason)
+        XCTAssertEqual(model.messages.filter { $0.requestID == request.id && $0.text.contains("permission was declined") }.count, 1)
+        XCTAssertTrue(model.messages.filter { $0.parentMessageID != nil }.isEmpty)
+        party.hosts["a"]!.complete("next request completed")
+        try await eventually { model.messages.contains { $0.text == "after-refusal-response" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    // Peter F18: consent stays visible on the recipient session during an automatic handoff.
+    func testHandoffApprovalWaitAndDenialPreserveAttemptAccounting() async throws {
+        let (_, party, model, original) = try fixture()
+        model.setCoordination(original, true)
+        let chat = try XCTUnwrap(model.chats.first { $0.id == original.id })
+        await party.connect()
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "handoff-with-consent"))
+        try await eventually { party.hosts["a"]!.prompts.count == 1 }
+        party.hosts["a"]!.complete("@ask b: do the consent-gated operation")
+        try await eventually { party.hosts["b"]!.prompts.count == 1 }
+        party.hosts["b"]!.approval()
+        try await eventually { party.sessions["b"]!.dialog != nil }
+        assertTrue(await model.send(chat: chat, recipient: "b", text: "after-handoff-approval"))
+        for _ in 0..<30 { await Task.yield() }
+        XCTAssertEqual(party.hosts["b"]!.prompts.count, 1)
+        XCTAssertEqual(model.messages.filter { $0.parentMessageID != nil && $0.recipient != nil }.count, 1)
+        await party.sessions["b"]!.answer(.confirmed(false))
+        try await eventually { party.hosts["b"]!.prompts.count == 2 }
+        XCTAssertTrue(model.messages.contains { $0.parentMessageID != nil && $0.state == .closed && $0.failureReason != nil })
+        XCTAssertEqual(model.messages.filter { $0.parentMessageID != nil && $0.recipient != nil }.count, 1)
+        party.hosts["b"]!.complete("human successor completed")
+        try await eventually { model.messages.contains { $0.text == "after-handoff-approval" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
     func testExplicitPromptRejectionDoesNotRemainUncertainOrBlockQueue() async throws {
         let (_, party, model, chat) = try fixture()
         await party.connect()
@@ -413,6 +590,9 @@ private final class ReliabilityHost {
     var streaming = false
     var loseAcknowledgement = false
     var rejectNextPrompt = false
+    var dropNextPromptBeforeAccept = false
+    var denialIncludesFailedTool = true
+    var denialFinalReply: String?
     var omitStartedDisposition = false
     var holdNextPromptAcknowledgement = false
     private var heldPromptAcknowledgement: (ReliabilityTransport, JSONValue)?
@@ -444,7 +624,8 @@ private final class ReliabilityHost {
     }
     func settleWithoutReply() { streaming = false; active?.emit(["type": "agent_settled"]) }
     func approval() { active?.emit(["type": "extension_ui_request", "method": "confirm", "id": "approval-isolated", "title": "Deny test operation?"]) }
-    func restartWithoutHistory() { active?.close(); entries = []; streaming = false; sessionID = "isolated-restarted-\(UUID().uuidString)" }
+    func restartWithoutHistory() { entries = []; restartRetainingHistory() }
+    func restartRetainingHistory() { active?.close(); streaming = false; sessionID = "isolated-restarted-\(UUID().uuidString)" }
     func receive(_ command: JSONValue, via transport: ReliabilityTransport) {
         let type = command["type"]?.stringValue ?? ""
         var reply: [String: JSONValue] = ["type": "response", "id": command["id"] ?? .null, "command": .string(type), "success": true]
@@ -461,6 +642,7 @@ private final class ReliabilityHost {
             }
         case "prompt":
             promptAttempts += 1
+            if dropNextPromptBeforeAccept { dropNextPromptBeforeAccept = false; transport.close(); return }
             if rejectNextPrompt {
                 rejectNextPrompt = false; reply["success"] = false; reply["error"] = "Permission denied before accepting prompt"; break
             }
@@ -477,7 +659,9 @@ private final class ReliabilityHost {
             append(role: "user", text: command["message"]?.stringValue ?? "")
         case "extension_ui_response":
             approvalAnswers.append(command["confirmed"]?.boolValue ?? false)
-            append(role: "toolResult", text: "Permission denied", failed: true); streaming = false
+            if denialIncludesFailedTool { append(role: "toolResult", text: "Permission denied", failed: true) }
+            if let denialFinalReply { append(role: "assistant", text: denialFinalReply) }
+            streaming = false
             transport.emit(["type": "agent_settled"]); return
         default: break
         }

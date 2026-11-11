@@ -312,8 +312,8 @@ private struct AlwaysAllowSection: View {
         let keys = session.config.alwaysAllow
         if !keys.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Always allowed").tavernFont(.headline, weight: .semibold)
-                Text("Runs without asking. Deletes, sudo, secrets and force-pushes still ask.")
+                Text("Saved approvals for this agent").tavernFont(.headline, weight: .semibold)
+                Text("Shared across all projects and this agent's individual chat, including future sessions. Only entries still eligible under the host's current rules can skip a prompt.")
                     .tavernFont(.caption).foregroundStyle(.secondary)
                 ForEach(keys, id: \.self) { key in
                     HStack {

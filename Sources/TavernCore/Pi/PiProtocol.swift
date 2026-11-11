@@ -128,11 +128,18 @@ public struct PiDialog: Equatable, Identifiable, Sendable {
     public var options: [String]
     public var placeholder: String?
     public var prefill: String?
-    /// For an approval the host lets Paul make permanent: "Always allow npm commands".
+    /// For an approval the host lets Paul remember: "Always allow `git status`".
     public var alwaysLabel: String?
 
     /// A durable host asking before a risky tool call runs (tavern-durable's approvals).
     public var isApproval: Bool { method == .confirm && id.hasPrefix("approval-") }
+
+    /// Host grants are shared by this agent's sessions, not scoped to the current project.
+    /// Display beside the persistent-consent choice rather than hiding scope in a tooltip.
+    public var alwaysScopeNotice: String? {
+        guard isApproval, alwaysLabel != nil else { return nil }
+        return "Always allow applies to this agent across all projects and its individual chat, including future sessions. Remove it in the agent's About tab."
+    }
 
     public init(id: String, method: Method, title: String, message: String? = nil,
                 options: [String] = [], placeholder: String? = nil, prefill: String? = nil, alwaysLabel: String? = nil) {

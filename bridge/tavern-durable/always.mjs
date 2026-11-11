@@ -1,7 +1,8 @@
 // "Always allow": tools Paul has told an agent to run without asking again, kept in the host's
 // state (not the agent's folder), in a place the approvals treat as a secret, so the agent can't
 // change it without asking. A shell command is remembered as its exact words, and only for a
-// known-safe program; anything else by the tool's name. Only calls the approvals call soft are
+// known-safe program. Other tools are never remembered: names do not constrain their
+// arguments, recipients or effects. Only calls the approvals call soft are
 // ever remembered or skipped: the hard rules (deletes, root, secrets, force-push) always ask.
 
 import fs from "node:fs";
@@ -30,16 +31,22 @@ const GH_READS = new Set(["list", "view", "status", "diff", "checks"]);
  * What "always allow" remembers for a call, or null when it can't be remembered safely. A shell
  * command is remembered whole, as its words ("git status", "gh pr list"): one simple command with
  * a read-only program (SAFE), no flags, variables, quotes, substitutions or redirects. File writes and edits are never remembered (each one goes somewhere
- * else); other tools are remembered by name.
+ * else); other tools are never remembered without an argument-aware scope.
  */
 export function alwaysKey(call) {
-  if (call?.name === "write" || call?.name === "edit" || call?.name === "read") return null;
-  if (call?.name !== "bash") return call?.name ? String(call.name) : null;
-  const command = String(call.arguments?.command ?? "").trim();
+  if (call?.name !== "bash") return null;
+  const raw = call.arguments?.command;
+  if (typeof raw !== "string" || /[\x00-\x1f\x7f]/.test(raw)) return null;
+  const command = raw.trim();
   if (!command || command.length > 200 || /[;&|`<>$'"\\\n(){}*?\[\]~!#]/.test(command)) return null;
   const words = command.split(/\s+/);
   const allowed = Object.hasOwn(SAFE, words[0]) ? SAFE[words[0]] : null;
   if (!allowed || (Array.isArray(allowed) && !allowed.includes(words[1]))) return null;
+  // Positional date operands can set the system clock (BSD/macOS and GNU forms).
+  if (words[0] === "date" && words.length !== 1) return null;
+  // Operands can make branch/remote mutate state; only exact read forms qualify.
+  if (words[0] === "git" && !(words.length === 2 && ["status", "branch", "remote"].includes(words[1])) &&
+      !(words.length === 3 && words[1] === "rev-parse" && words[2] === "HEAD")) return null;
   if (words[0] === "gh" && !GH_READS.has(words[2])) return null;
   // No flags at all: some hand a program something to run or somewhere to write.
   if (words.some((word) => word.startsWith("-"))) return null;
