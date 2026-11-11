@@ -15,17 +15,40 @@ extension AppModel: ProjectChatSessionProvider {}
 final class ProjectChatsModel: ObservableObject {
     @Published var chats: [ProjectChat] = []
     @Published var messages: [ProjectChatMessage] = []
-    @Published var error: String?
+    @Published var error: String? { didSet { errorRequestID = nil } }
+    private var errorRequestID: String?
     private let store: ProjectChatStore?
     private weak var model: (any ProjectChatSessionProvider)?
     private var watchers: [String: AnyCancellable] = [:]
     private var liveRequests: Set<String> = []
+    private var inFlightRequests: Set<String> = []
+    private var dispatchedHistoryRevisions: [String: Int] = [:]
     private var draining: Set<String> = []
     init(store: EventStore?, model: any ProjectChatSessionProvider) {
         self.store = store.map(ProjectChatStore.init)
         self.model = model
         reload()
+        // A durable claim proves an attempt, not that it survived the previous process.
+        // Retain the claim, but never present a recovered attempt as actively sending.
+        do {
+            for var request in messages where [.dispatching, .waiting].contains(request.state) {
+                request.state = .uncertain
+                request.failureReason = "Tavern restarted before tracking completed. Delivery is unverified; review the individual agent chat before closing tracking or sending again."
+                try self.store?.save(request)
+            }
+            reload()
+        } catch { self.error = "Could not recover interrupted requests: \(error)" }
         for agent in Set(messages.compactMap(\.recipient)) { watch(agent) }
+    }
+    private func recordRequestError(_ reason: String, requestID: String) {
+        error = reason
+        errorRequestID = requestID
+    }
+    private func finishTracking(_ requestID: String) {
+        liveRequests.remove(requestID)
+        dispatchedHistoryRevisions[requestID] = nil
+        // A resolved delivery must not erase an unrelated routing or handoff warning.
+        if errorRequestID == requestID { error = nil }
     }
     private var allowed: Set<String> { Set(model?.roster.piAgents.filter { $0.endpoint != nil }.map(\.id) ?? []) }
     func reload() {
@@ -134,7 +157,9 @@ final class ProjectChatsModel: ObservableObject {
                 self.reload()
                 if let request {
                     await self.dispatch(request)
-                    progressed = true
+                    // A local readiness failure leaves the same item queued. Wait for
+                    // the session's next readiness update rather than spinning on it.
+                    progressed = self.messages.first(where: { $0.id == request.id })?.state != .queued
                 }
             } catch { self.error = "Could not deliver queued message: \(error)" }
         }
@@ -167,36 +192,47 @@ final class ProjectChatsModel: ObservableObject {
             return
         }
         liveRequests.insert(original.id)
+        inFlightRequests.insert(original.id)
+        dispatchedHistoryRevisions[original.id] = session.historyRevision
         watch(target)
         let outcome = await session.sendProjectRequestOutcome(prompt)
+        inFlightRequests.remove(original.id)
         do {
             if var current = try store.messages().first(where: { $0.id == original.id }), [.dispatching, .waiting, .uncertain].contains(current.state) {
                 switch outcome {
                 case .accepted: current.state = .waiting
-                case .uncertain: current.state = .uncertain
+                case .notSent:
+                    current.state = .queued
+                    current.prompt = nil
+                    current.failureReason = nil
+                    finishTracking(current.id)
+                case .uncertain:
+                    current.state = .uncertain
+                    current.failureReason = "The delivery acknowledgement was lost or interrupted. Review the individual agent chat before closing tracking or sending again."
                 case .rejected(let reason):
                     current.state = .closed
                     current.failureReason = reason
                     // No accepted invocation exists to contribute to subsequent agent context.
                     current.prompt = nil
-                    liveRequests.remove(current.id)
+                    finishTracking(current.id)
                 }
                 try store.save(current)
             }
             reload()
             switch outcome {
-            case .accepted: break
+            case .accepted, .notSent: break
             case .rejected(let reason): error = "Request to \(target) was rejected: \(reason)"
-            case .uncertain: error = "Delivery to \(target) is uncertain or was interrupted. Check its individual chat before resending; Tavern will not retry automatically."
+            case .uncertain:
+                recordRequestError("Delivery to \(target) is uncertain or was interrupted. Check its individual chat before resending; Tavern will not retry automatically.", requestID: original.id)
             }
             if let session = model?.session(for: target) { reconcile(agent: target, transcript: session.transcript) }
         } catch { self.error = "Could not track delivery: \(error)" }
     }
     private func watch(_ agent: String) {
         guard watchers[agent] == nil, let session = model?.session(for: agent) else { return }
-        watchers[agent] = session.$transcript.combineLatest(session.$presence, session.$dialog).sink { [weak self, weak session] _, presence, _ in
+        watchers[agent] = session.$transcript.combineLatest(session.$presence, session.$dialog, session.$historyRevision).sink { [weak self, weak session] _, presence, _, _ in
             // Published values arrive before storage updates; defer until presence/transcript agree.
-            guard presence == .idle else { return }
+            guard presence != .working else { return }
             Task { @MainActor [weak self, weak session] in
                 guard let session else { return }
                 self?.reconcile(agent: agent, transcript: session.transcript)
@@ -204,17 +240,37 @@ final class ProjectChatsModel: ObservableObject {
         }
     }
     private func reconcile(agent: String, transcript: [TranscriptItem]) {
-        guard let store, model?.session(for: agent)?.presence == .idle else { return }
+        guard let store, let session = model?.session(for: agent) else { return }
+        let idle = session.presence == .idle
+        let interrupted: Bool
+        switch session.presence {
+        case .disconnected, .reconnecting, .failed: interrupted = true
+        default: interrupted = false
+        }
+        guard idle || interrupted else { return }
+        if idle && !session.verifiedIdleHistory { return }
         do {
             for request in try store.messages() where request.recipient == agent && [.dispatching, .waiting, .uncertain].contains(request.state) {
-                if let item = ProjectChatStore.response(to: request, transcript: transcript) {
+                // Initial observer callbacks can overlap the transport acknowledgement.
+                // Let dispatch finish before interpreting an idle snapshot as interruption.
+                guard !inFlightRequests.contains(request.id) else { continue }
+                if idle, let item = ProjectChatStore.response(to: request, transcript: transcript) {
                     if try store.consumeSilentResponse(to: request, item: item) {
-                        liveRequests.remove(request.id)
+                        finishTracking(request.id)
                         continue
                     }
                     let reply = try store.reply(to: request, item: item)
                     // Restart recovery may record a reply, but never wakes agents or replays handoffs.
-                    if liveRequests.remove(request.id) != nil,
+                    let wasLive = liveRequests.contains(request.id)
+                    finishTracking(request.id)
+                    if !wasLive, !ProjectChatStore.handoffDirectives(in: reply.text).isEmpty {
+                        var recovered = request
+                        recovered.state = .replied
+                        recovered.failureReason = "Agent handoffs in this recovered reply were not sent after Tavern restarted. Send a new request if they are still needed."
+                        try store.save(recovered)
+                        error = recovered.failureReason
+                    }
+                    if wasLive,
                        let chat = try store.chats().first(where: { $0.id == request.chatID && $0.archived != true }) {
                         let idle = Set(chat.participants.filter { model?.session(for: $0)?.presence == .idle })
                         let result = try store.prepareHandoffs(chat: chat, reply: reply, allowedPiIDs: allowed, availablePiIDs: idle)
@@ -226,23 +282,38 @@ final class ProjectChatsModel: ObservableObject {
                             }
                         }
                     }
-                } else if let failure = ProjectChatStore.failure(to: request, transcript: transcript) {
+                } else if idle, let failure = ProjectChatStore.failure(to: request, transcript: transcript) {
                     var failed = request
                     failed.state = .closed
                     failed.failureReason = failure
                     try store.save(failed)
-                    liveRequests.remove(request.id)
+                    finishTracking(request.id)
+                } else {
+                    // An acknowledgement can precede busy publication. Only a newer durable
+                    // history read makes an idle/no-answer conclusion authoritative.
+                    if idle, let sentAt = dispatchedHistoryRevisions[request.id], session.historyRevision <= sentAt { continue }
+                    let reason = idle
+                        ? "The agent is idle, but no final reply can be safely attributed to this request. Its history may be missing or a later private message may have changed the turn. Review the individual agent chat, then close tracking manually if appropriate."
+                        : "The connection was interrupted before a final reply was verified. Review the individual agent chat before closing tracking or sending again."
+                    if request.state != .uncertain || request.failureReason == nil {
+                        var uncertain = request
+                        uncertain.state = .uncertain
+                        uncertain.failureReason = reason
+                        try store.save(uncertain)
+                        recordRequestError(reason, requestID: request.id)
+                    }
                 }
             }
             reload()
-            scheduleDrain(agent)
+            if idle { scheduleDrain(agent) }
         } catch { self.error = "Could not save the agent reply: \(error)" }
     }
     /// Only a human can release an uncertain attempt after inspecting the individual transcript.
     func closeAttempt(_ message: ProjectChatMessage) {
         do {
-            var closed = message; closed.state = .closed
+            var closed = message; closed.state = .closed; closed.failureReason = nil
             try store?.save(closed); reload()
+            finishTracking(message.id)
             if let agent = message.recipient { scheduleDrain(agent) }
         } catch { self.error = "Could not close the request: \(error)" }
     }
@@ -436,6 +507,9 @@ struct ProjectChatsView: View {
                         } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
                     }
                 }
+                if let reason = request.failureReason, request.state == .uncertain || request.state == .replied {
+                    Text(reason).tavernFont(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -517,7 +591,7 @@ struct ProjectChatsView: View {
         }
     }
     private func stateLabel(_ request: ProjectChatMessage) -> String {
-        if let failure = request.failureReason { return "Stopped: \(failure)" }
+        if request.state == .closed, let failure = request.failureReason { return "Stopped: \(failure)" }
         if request.declinedResponse == true { return "Seen" }
         switch request.state { case .queued: return "Queued"
         case .dispatching: return "Sending"

@@ -42,6 +42,22 @@ final class ProjectChatReliabilityTests: XCTestCase {
         XCTAssertEqual(party.hosts["a"]!.prompts.filter { $0.contains("--- Current human message ---\naccepted-but-ack-lost") }.count, 1)
         party.hosts["a"]!.complete("second reply")
         try await eventually { model.messages.filter { $0.recipient == "a" }.allSatisfy { $0.state == .replied } }
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.messages.filter { $0.recipient == "a" }.allSatisfy { $0.failureReason == nil })
+        await party.disconnect()
+    }
+
+    func testReconciledDeliveryDoesNotClearAnUnrelatedWarning() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        party.hosts["a"]!.loseAcknowledgement = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "lost-ack-with-other-warning"))
+        try await eventually { model.messages.contains { $0.state == .uncertain } }
+        model.error = "Handoff limit reached in another thread."
+        party.hosts["a"]!.complete("recovered answer", notify: false)
+        await party.sessions["a"]!.reconnectNow()
+        try await eventually { model.messages.contains { $0.recipient == "a" && $0.state == .replied } }
+        XCTAssertEqual(model.error, "Handoff limit reached in another thread.")
         await party.disconnect()
     }
 
@@ -57,8 +73,147 @@ final class ProjectChatReliabilityTests: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
         XCTAssertEqual(party.hosts["a"]!.prompts.count, 1)
         XCTAssertEqual(model.messages.filter { $0.state == .queued }.count, 1)
-        XCTAssertTrue(model.messages.contains { $0.text == "old-host-turn" && [.waiting, .uncertain].contains($0.state) })
+        XCTAssertTrue(model.messages.contains { $0.text == "old-host-turn" && $0.state == .uncertain && $0.failureReason != nil })
         await party.disconnect()
+    }
+
+    func testPrivateSteeringMakesAttributionUncertainUntilManualClose() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "shared-request"))
+        try await eventually { model.messages.contains { $0.text == "shared-request" && $0.state == .waiting } }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "shared-successor"))
+        assertTrue(await party.sessions["a"]!.steer("private-user-message"))
+        party.hosts["a"]!.complete("PRIVATE RESPONSE: must never appear in the shared project")
+        try await eventually { model.messages.contains { $0.text == "shared-request" && $0.state == .uncertain } }
+        let uncertain = try XCTUnwrap(model.messages.first { $0.text == "shared-request" })
+        XCTAssertTrue(uncertain.failureReason?.contains("safely attributed") == true)
+        XCTAssertFalse(model.messages.contains { $0.text.contains("PRIVATE RESPONSE") || $0.text.contains("private-user-message") })
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 1)
+        XCTAssertTrue(model.messages.contains { $0.text == "shared-successor" && $0.state == .queued })
+        model.closeAttempt(uncertain)
+        XCTAssertNil(model.messages.first { $0.id == uncertain.id }?.failureReason)
+        XCTAssertNotNil(model.messages.first { $0.id == uncertain.id }?.prompt)
+        XCTAssertNil(model.error)
+        try await eventually { party.hosts["a"]!.prompts.count == 2 }
+        XCTAssertFalse(party.hosts["a"]!.prompts[1].contains("PRIVATE RESPONSE"))
+        party.hosts["a"]!.complete("successor completed")
+        try await eventually { model.messages.contains { $0.text == "shared-successor" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    func testRetainedPromptWithoutTerminalReplyBecomesUncertain() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "interrupted-turn"))
+        try await eventually { model.messages.contains { $0.text == "interrupted-turn" && $0.state == .waiting } }
+        party.hosts["a"]!.settleWithoutReply()
+        try await eventually { model.messages.contains { $0.text == "interrupted-turn" && $0.state == .uncertain } }
+        XCTAssertTrue(party.sessions["a"]!.transcript.contains { $0.role == .user })
+        XCTAssertTrue(model.messages.first { $0.text == "interrupted-turn" }?.failureReason?.contains("safely attributed") == true)
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 1)
+        await party.disconnect()
+    }
+
+    func testRecoveredClaimBeforeSendIsUncertainAndNeverAutomaticallyResent() async throws {
+        let (events, party, _, chat) = try fixture()
+        let store = ProjectChatStore(store: events)
+        _ = try store.enqueue(chat: chat, recipients: ["a"], text: "claimed-before-crash", allowedPiIDs: ["a", "b", "c"])
+        let claimed = try XCTUnwrap(store.claimNextQueued(recipient: "a", allowedPiIDs: ["a", "b", "c"]))
+        XCTAssertEqual(claimed.state, .dispatching)
+        let recovered = ProjectChatsModel(store: events, model: party)
+        XCTAssertEqual(recovered.messages.first { $0.id == claimed.id }?.state, .uncertain)
+        XCTAssertTrue(recovered.messages.first { $0.id == claimed.id }?.failureReason?.contains("restarted") == true)
+        await party.connect()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(party.hosts["a"]!.prompts.count, 0)
+        XCTAssertEqual(recovered.messages.first { $0.id == claimed.id }?.state, .uncertain)
+        await party.disconnect()
+    }
+
+    func testAcceptedAckBeforeBusyPublicationDoesNotBecomeUncertain() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        party.hosts["a"]!.omitStartedDisposition = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "ack-before-busy"))
+        try await eventually { model.messages.contains { $0.text == "ack-before-busy" && $0.state == .waiting } }
+        try await party.sessions["a"]!.sync()
+        XCTAssertTrue(party.hosts["a"]!.streaming)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(model.messages.first { $0.text == "ack-before-busy" }?.state, .waiting)
+        party.hosts["a"]!.complete("safe correlated answer")
+        try await eventually { model.messages.contains { $0.text == "ack-before-busy" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    func testDelayedPositiveAcknowledgementCannotOverwriteSettledTurn() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        let host = party.hosts["a"]!
+        let session = party.sessions["a"]!
+        host.holdNextPromptAcknowledgement = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "completed-before-ack"))
+        try await eventually { host.hasHeldPromptAcknowledgement }
+        host.complete("durable reply before acknowledgement")
+        try await eventually { session.verifiedIdleHistory && session.transcript.contains { $0.text == "durable reply before acknowledgement" } }
+        XCTAssertEqual(model.messages.first { $0.text == "completed-before-ack" }?.state, .dispatching)
+        host.releasePromptAcknowledgement()
+        try await eventually { model.messages.contains { $0.text == "completed-before-ack" && $0.state == .replied } }
+        XCTAssertEqual(session.presence, .idle)
+        XCTAssertEqual(model.messages.filter { $0.text == "durable reply before acknowledgement" }.count, 1)
+        XCTAssertEqual(host.prompts.count, 1)
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "after-delayed-ack"))
+        try await eventually { host.prompts.count == 2 }
+        host.complete("successor completed")
+        try await eventually { model.messages.contains { $0.text == "after-delayed-ack" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    func testDelayedPositiveAcknowledgementCannotOverwriteVerifiedIdleRead() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        let host = party.hosts["a"]!
+        let session = party.sessions["a"]!
+        host.holdNextPromptAcknowledgement = true
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "completed-without-settled-event"))
+        try await eventually { host.hasHeldPromptAcknowledgement }
+        host.complete("reply found by sync", notify: false)
+        try await session.sync()
+        XCTAssertTrue(session.verifiedIdleHistory)
+        host.releasePromptAcknowledgement()
+        try await eventually { model.messages.contains { $0.text == "completed-without-settled-event" && $0.state == .replied } }
+        XCTAssertEqual(session.presence, .idle)
+        XCTAssertEqual(model.messages.filter { $0.text == "reply found by sync" }.count, 1)
+        await party.disconnect()
+    }
+
+    func testHistoryReadStartedBeforeSubmissionCannotProveTurnSettled() async throws {
+        let (_, party, model, chat) = try fixture()
+        await party.connect()
+        let host = party.hosts["a"]!
+        let session = party.sessions["a"]!
+        host.holdNextEntries = true
+        host.omitStartedDisposition = true
+        let olderRead = Task { try await session.sync() }
+        try await eventually { host.hasHeldEntries }
+        assertTrue(await model.send(chat: chat, recipient: "a", text: "after-old-read-started"))
+        try await eventually { model.messages.contains { $0.text == "after-old-read-started" && $0.state == .waiting } }
+        host.releaseEntries()
+        try await olderRead.value
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(session.verifiedIdleHistory)
+        XCTAssertEqual(model.messages.first { $0.text == "after-old-read-started" }?.state, .waiting)
+        host.complete("new turn completed")
+        try await eventually { model.messages.contains { $0.text == "after-old-read-started" && $0.state == .replied } }
+        await party.disconnect()
+    }
+
+    func testMissingClientProvesNoProjectRequestWasSent() async throws {
+        let (_, party, _, _) = try fixture()
+        let outcome = await party.sessions["a"]!.sendProjectRequestOutcome("not sent")
+        XCTAssertEqual(outcome, .notSent)
+        XCTAssertTrue(party.sessions["a"]!.pendingMessages.isEmpty)
+        XCTAssertEqual(party.hosts["a"]!.promptAttempts, 0)
     }
 
     func testPermissionDenialClosesFailedTurnAndReleasesQueue() async throws {
@@ -148,6 +303,8 @@ final class ProjectChatReliabilityTests: XCTestCase {
         try await eventually { secondParty.hosts["a"]!.prompts.count == 2 }
         XCTAssertEqual(secondParty.hosts["b"]!.prompts.count, 0)
         XCTAssertEqual(secondModel.messages.filter { $0.text == "before-restart" && $0.state == .replied }.count, 1)
+        XCTAssertTrue(secondModel.messages.first { $0.text == "before-restart" }?.failureReason?.contains("handoffs") == true)
+        XCTAssertTrue(try ProjectChatStore(store: reopened).messages().first { $0.text == "before-restart" }?.failureReason?.contains("not sent") == true)
         secondParty.hosts["a"]!.complete("successor after restart")
         try await eventually { secondModel.messages.filter { $0.recipient != nil }.allSatisfy { $0.state == .replied } }
         for session in secondParty.sessions.values { try await session.sync() }
@@ -157,7 +314,29 @@ final class ProjectChatReliabilityTests: XCTestCase {
     }
 
     func testSustainedThreeAgentQueuesSurviveRepeatedDisconnectsWithoutDuplicates() async throws {
-        let (_, party, model, chat) = try fixture()
+        let (events, party, model, chat) = try fixture()
+        let historyCount = ProcessInfo.processInfo.environment["TAVERN_HISTORY_BENCHMARK"] == "1" ? 2_000 : 0
+        if historyCount > 0 {
+            // Real dispatcher soak atop a long-lived project, not just isolated store reads.
+            let store = ProjectChatStore(store: events)
+            let template = try store.prepare(chat: chat, recipient: "a", text: "historical seed", allowedPiIDs: ["a", "b", "c"])
+            var records: [TavernEvent] = []
+            for index in 0..<historyCount {
+                var message = template
+                message.id = index == 0 ? template.id : "historical-\(index)"
+                message.text = String(repeating: "x", count: 2_000)
+                message.prompt = String(repeating: "x", count: 40_000)
+                message.queueSequence = Int64(index)
+                for state in [ProjectChatMessage.State.dispatching, .waiting, .replied] {
+                    message.state = state
+                    records.append(TavernEvent(source: "tavern.project-chat", sourceID: UUID().uuidString,
+                        threadKey: "project:\(chat.id)", sourceTS: Date(timeIntervalSince1970: Double(index)),
+                        kind: "message", payload: try JSONEncoder().encode(message)))
+                }
+            }
+            try events.append(records)
+            model.reload()
+        }
         await party.connect()
         let soak = ProcessInfo.processInfo.environment["TAVERN_RELIABILITY_SOAK"] == "1"
         let rounds = soak ? 60 : 40
@@ -181,7 +360,7 @@ final class ProjectChatReliabilityTests: XCTestCase {
                 XCTAssertTrue(prompt.hasSuffix("--- Current human message ---\nstress-round-\(index)"))
             }
         }
-        XCTAssertEqual(model.messages.filter { $0.recipient != nil }.count, rounds * 3)
+        XCTAssertEqual(model.messages.filter { $0.recipient != nil }.count, historyCount + rounds * 3)
         XCTAssertEqual(model.messages.filter { $0.author != nil && $0.recipient == nil }.count, rounds * 3)
         await party.disconnect()
     }
@@ -234,6 +413,23 @@ private final class ReliabilityHost {
     var streaming = false
     var loseAcknowledgement = false
     var rejectNextPrompt = false
+    var omitStartedDisposition = false
+    var holdNextPromptAcknowledgement = false
+    private var heldPromptAcknowledgement: (ReliabilityTransport, JSONValue)?
+    var hasHeldPromptAcknowledgement: Bool { heldPromptAcknowledgement != nil }
+    func releasePromptAcknowledgement() {
+        guard let (transport, reply) = heldPromptAcknowledgement else { return }
+        heldPromptAcknowledgement = nil
+        transport.emit(reply)
+    }
+    var holdNextEntries = false
+    private var heldEntries: (ReliabilityTransport, JSONValue)?
+    var hasHeldEntries: Bool { heldEntries != nil }
+    func releaseEntries() {
+        guard let (transport, reply) = heldEntries else { return }
+        heldEntries = nil
+        transport.emit(reply)
+    }
     private var active: ReliabilityTransport?
     init(id: String) { self.id = id; sessionID = "isolated-\(id)-\(UUID().uuidString)" }
     func transport() -> ReliabilityTransport { let value = ReliabilityTransport(host: self); active = value; return value }
@@ -246,6 +442,7 @@ private final class ReliabilityHost {
         append(role: "assistant", text: text); streaming = false
         if notify { active?.emit(["type": "agent_settled"]) }
     }
+    func settleWithoutReply() { streaming = false; active?.emit(["type": "agent_settled"]) }
     func approval() { active?.emit(["type": "extension_ui_request", "method": "confirm", "id": "approval-isolated", "title": "Deny test operation?"]) }
     func restartWithoutHistory() { active?.close(); entries = []; streaming = false; sessionID = "isolated-restarted-\(UUID().uuidString)" }
     func receive(_ command: JSONValue, via transport: ReliabilityTransport) {
@@ -257,6 +454,11 @@ private final class ReliabilityHost {
             let since = command["since"]?.stringValue
             let start = since.flatMap { cursor in entries.firstIndex { $0["id"]?.stringValue == cursor }.map { $0 + 1 } } ?? 0
             reply["data"] = ["entries": .array(Array(entries.dropFirst(start)))]
+            if holdNextEntries {
+                holdNextEntries = false
+                heldEntries = (transport, .object(reply))
+                return
+            }
         case "prompt":
             promptAttempts += 1
             if rejectNextPrompt {
@@ -265,7 +467,14 @@ private final class ReliabilityHost {
             let prompt = command["message"]?.stringValue ?? ""
             prompts.append(prompt); append(role: "user", text: prompt); streaming = true
             if loseAcknowledgement { loseAcknowledgement = false; transport.close(); return }
-            reply["data"] = ["disposition": "started"]
+            if !omitStartedDisposition { reply["data"] = ["disposition": "started"] }
+            if holdNextPromptAcknowledgement {
+                holdNextPromptAcknowledgement = false
+                heldPromptAcknowledgement = (transport, .object(reply))
+                return
+            }
+        case "steer", "follow_up":
+            append(role: "user", text: command["message"]?.stringValue ?? "")
         case "extension_ui_response":
             approvalAnswers.append(command["confirmed"]?.boolValue ?? false)
             append(role: "toolResult", text: "Permission denied", failed: true); streaming = false

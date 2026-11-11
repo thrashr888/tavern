@@ -45,15 +45,43 @@ public enum ProjectChatError: Error { case invalidParticipants, invalidLead, inv
 public final class ProjectChatStore {
     private let store: EventStore
     private let source = "tavern.project-chat"
+    private var lastPosition: Int64 = 0
+    private var chatIndex: [String: ProjectChat] = [:]
+    private var messageIndex: [String: ProjectChatMessage] = [:]
+    private var handoffReceipts: Set<String> = []
+    private var sortedChats: [ProjectChat]?
+    private var sortedMessages: [ProjectChatMessage]?
     public init(store: EventStore) { self.store = store }
 
-    public func chats() throws -> [ProjectChat] {
-        var values: [String: ProjectChat] = [:]
-        for event in try store.events(source: source) where event.kind == "chat" {
-            let value = try JSONDecoder().decode(ProjectChat.self, from: event.payload)
-            values[value.id] = value
+    /// Reduce each appended revision once, in durable insertion order. Never use sourceTS to
+    /// resolve state, even after reopening the database. Separate store instances still observe
+    /// each other's writes through the insertion cursor, without rescanning old prompt copies.
+    private func refresh() throws {
+        let decoder = JSONDecoder()
+        for record in try store.eventRecords(source: source, after: lastPosition) {
+            let event = record.event
+            switch event.kind {
+            case "chat":
+                let value = try decoder.decode(ProjectChat.self, from: event.payload)
+                chatIndex[value.id] = value
+                sortedChats = nil
+            case "message":
+                let value = try decoder.decode(ProjectChatMessage.self, from: event.payload)
+                messageIndex[value.id] = value
+                sortedMessages = nil
+            case "handoff-receipt": handoffReceipts.insert(event.sourceID)
+            default: break
+            }
+            lastPosition = record.position
         }
-        return values.values.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    public func chats() throws -> [ProjectChat] {
+        try refresh()
+        if let sortedChats { return sortedChats }
+        let result = chatIndex.values.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        sortedChats = result
+        return result
     }
 
     public static let homeID = "tavern-home"
@@ -125,12 +153,14 @@ public final class ProjectChatStore {
     }
 
     public func messages(chatID: String? = nil) throws -> [ProjectChatMessage] {
-        var values: [String: ProjectChatMessage] = [:]
-        for event in try store.events(source: source) where event.kind == "message" {
-            let value = try JSONDecoder().decode(ProjectChatMessage.self, from: event.payload)
-            if chatID == nil || value.chatID == chatID { values[value.id] = value }
+        try refresh()
+        let result: [ProjectChatMessage]
+        if let sortedMessages { result = sortedMessages }
+        else {
+            result = messageIndex.values.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+            sortedMessages = result
         }
-        return values.values.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        return chatID.map { id in result.filter { $0.chatID == id } } ?? result
     }
 
     /// Reserve before transmission. Outstanding attempts block a second send to the same agent,
@@ -172,7 +202,11 @@ public final class ProjectChatStore {
             guard let chat = latestChats.first(where: { $0.id == item.chatID }), chat.archived != true,
                   chat.participants.contains(recipient), allowedPiIDs.contains(recipient),
                   item.parentMessageID == nil || (chat.coordinationEnabled == true && item.author.map { chat.participants.contains($0) } == true) else {
-                var canceled = item; canceled.state = .closed; try save(canceled); continue
+                var canceled = item
+                canceled.state = .closed
+                canceled.failureReason = "Not sent because the recipient, project membership, or handoff settings changed."
+                try save(canceled)
+                continue
             }
             // Include completed prior replies, but never leak later queued user messages into an earlier turn.
             let context = current.filter {
@@ -285,7 +319,7 @@ public final class ProjectChatStore {
                 continue
             }
             guard fence == nil, raw.hasPrefix("@ask "), let colon = raw.firstIndex(of: ":") else { continue }
-            let target = String(raw[raw.index(raw.startIndex, offsetBy: 5)..<colon])
+            let target = String(raw[raw.index(raw.startIndex, offsetBy: 5)..<colon]).lowercased()
             let question = raw[raw.index(after: colon)...].trimmingCharacters(in: .whitespaces)
             guard !target.isEmpty, target.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) || "-_".unicodeScalars.contains($0) }),
                   !question.isEmpty, question.count <= 16_000 else { continue }
@@ -302,7 +336,8 @@ public final class ProjectChatStore {
         guard reply.chatID == chat.id, let author = reply.author, reply.recipient == nil,
               let requestID = reply.requestID else { throw ProjectChatError.invalidMessage }
         let receiptID = "handoffs:\(reply.id)"
-        if try store.events(source: source).contains(where: { $0.kind == "handoff-receipt" && $0.sourceID == receiptID }) {
+        try refresh()
+        if handoffReceipts.contains(receiptID) {
             return ProjectChatHandoffResult(requests: [], notices: [])
         }
         let current = try messages()
@@ -317,12 +352,13 @@ public final class ProjectChatStore {
         var notices: [String] = []
         let latestChat = try chats().first { $0.id == chat.id }
         for directive in Self.handoffDirectives(in: reply.text) {
-            let target = directive.recipient
+            let matches = latestChat?.participants.filter { $0.lowercased() == directive.recipient } ?? []
+            let target = matches.count == 1 ? matches[0] : directive.recipient
             guard latestChat?.coordinationEnabled == true, latestChat?.archived != true,
                   latestChat?.participants.contains(author) == true else {
                 notices.append("Agent handoffs are off; request to \(target) was not sent."); continue
             }
-            guard target != author, chat.participants.contains(target), latestChat?.participants.contains(target) == true,
+            guard matches.count == 1, target != author, chat.participants.contains(target), latestChat?.participants.contains(target) == true,
                   allowedPiIDs.contains(target) else {
                 notices.append("Request to \(target) was not sent: not another configured participant."); continue
             }
@@ -368,6 +404,7 @@ public final class ProjectChatStore {
         }
         current.state = .replied
         current.declinedResponse = true
+        current.failureReason = nil
         try save(current)
         return true
     }
@@ -380,7 +417,7 @@ public final class ProjectChatStore {
                                        author: agent, recipient: nil, text: item.text, date: item.date,
                                        state: .replied, requestID: request.id, prompt: nil,
                                        rootRequestID: request.rootRequestID ?? request.id, parentMessageID: nil, queueSequence: request.queueSequence)
-        var done = request; done.state = .replied
+        var done = request; done.state = .replied; done.failureReason = nil
         let encoder = JSONEncoder()
         let now = Date()
         try store.append([reply, done].map { value in

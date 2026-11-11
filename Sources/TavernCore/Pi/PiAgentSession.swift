@@ -42,6 +42,11 @@ public final class PiAgentSession: ObservableObject {
     }
     /// The transcript as thread rows: messages, folded work and heartbeats, cards.
     public private(set) var rows: [PiThreadRow] = []
+    /// Successful durable-history reads, including empty reads after a host restart.
+    @Published public private(set) var historyRevision = 0
+    /// The durable read began after the latest submission and verified a settled host.
+    @Published public private(set) var verifiedIdleHistory = false
+    private var submissionRevision = 0
     /// Assistant text streaming in for the current turn; cleared when the turn settles.
     @Published public private(set) var streamingText = ""
     /// Thinking streaming in for the current turn, so a long think doesn't look idle.
@@ -215,6 +220,8 @@ public final class PiAgentSession: ObservableObject {
     /// dedup on `(source, source_id)` makes the replay harmless.
     public func sync() async throws {
         guard let client else { throw PiClientError.disconnected }
+        let submissionAtRead = submissionRevision
+        let activityAtRead = activityRevision
         let state = try await client.send(.getState)
         config = PiAgentConfig(state: state.data)
         guard let sessionID = state.data?["sessionId"]?.stringValue else { return }
@@ -232,10 +239,15 @@ public final class PiAgentSession: ObservableObject {
         }
 
         let entries = response.data?["entries"]?.arrayValue ?? []
-        guard let lastID = entries.last?["id"]?.stringValue else { return }
-        let events = PiEntries.events(from: entries, sessionID: sessionID, agentID: agentID)
-        try store.append(events, cursor: (cursorKey, PiEntries.Cursor(sessionID: sessionID, entryID: lastID).stored))
-        reloadTranscript()
+        if let lastID = entries.last?["id"]?.stringValue {
+            let events = PiEntries.events(from: entries, sessionID: sessionID, agentID: agentID)
+            try store.append(events, cursor: (cursorKey, PiEntries.Cursor(sessionID: sessionID, entryID: lastID).stored))
+            reloadTranscript()
+        }
+        if submissionAtRead == submissionRevision, activityAtRead == activityRevision {
+            verifiedIdleHistory = state.data?["isStreaming"]?.boolValue == false
+        }
+        historyRevision += 1
     }
 
     // MARK: - Controls (plan section 4; no new or switch session)
@@ -258,13 +270,18 @@ public final class PiAgentSession: ObservableObject {
     @discardableResult
     public func send(_ text: String, images: [PiImage] = []) async -> Bool {
         let text = withReactionNotes(text)
+        let activityAtSend = activityRevision
         return await submit(text, .prompt(text, streamingBehavior: nil, images: images)) { response in
-            if response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
+            // A delayed acknowledgement describes acceptance, not the current turn state.
+            if self.activityRevision == activityAtSend, !self.verifiedIdleHistory,
+               response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
         }
     }
 
     public enum ProjectRequestOutcome: Equatable, Sendable {
         case accepted
+        /// No client existed and no transport call was attempted.
+        case notSent
         case rejected(String)
         case uncertain
     }
@@ -276,8 +293,11 @@ public final class PiAgentSession: ObservableObject {
 
     /// A negative server acknowledgement proves rejection. A lost acknowledgement does not.
     public func sendProjectRequestOutcome(_ text: String) async -> ProjectRequestOutcome {
+        guard client != nil else { return .notSent }
+        let activityAtSend = activityRevision
         let result = await submitResult(text, .prompt(text, streamingBehavior: nil, images: [])) { response in
-            if response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
+            if self.activityRevision == activityAtSend, !self.verifiedIdleHistory,
+               response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
         }
         switch result {
         case .success: return .accepted
@@ -306,6 +326,8 @@ public final class PiAgentSession: ObservableObject {
     }
 
     private func submitResult(_ text: String, _ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async -> Result<PiResponse, Error> {
+        submissionRevision += 1
+        verifiedIdleHistory = false
         var attached: [PiImage] = []
         switch command {
         case .prompt(_, _, let images), .steer(_, let images), .followUp(_, let images): attached = images
@@ -483,6 +505,7 @@ public final class PiAgentSession: ObservableObject {
         case .event(let type, let raw):
             switch type {
             case "agent_start":
+                verifiedIdleHistory = false
                 activityRevision += 1
                 presence = .working
                 turnFailed = false
