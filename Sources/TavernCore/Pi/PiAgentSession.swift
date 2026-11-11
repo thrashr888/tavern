@@ -31,7 +31,7 @@ public final class PiAgentSession: ObservableObject {
     var reactionStore: EventStore? { store }
     /// The user's reactions per transcript item id.
     @Published public internal(set) var reactions: [String: [Reaction]] = [:]
-    private let makeTransport: () throws -> PiTransport
+    private let makeTransport: () async throws -> PiTransport
     private var client: PiClient?
     private var listener: Task<Void, Never>?
 
@@ -62,6 +62,7 @@ public final class PiAgentSession: ObservableObject {
     public let modelLocks: ModelLockStore
     private var pendingReason = ""
     private var turnFailed = false
+    private var activityRevision = 0
     /// Messages the user sent that the agent hasn't committed yet. Shown at once, so a slow start
     /// (a model loading, a queued follow-up) doesn't look like nothing happened.
     @Published public private(set) var pendingMessages: [TranscriptItem] = []
@@ -70,7 +71,7 @@ public final class PiAgentSession: ObservableObject {
     @Published public var returnedDraft: String?
 
     public init(agentID: String, store: EventStore, modelLocks: ModelLockStore = ModelLockStore(),
-                makeTransport: @escaping () throws -> PiTransport) {
+                makeTransport: @escaping () async throws -> PiTransport) {
         self.agentID = agentID
         self.store = store
         self.modelLocks = modelLocks
@@ -126,18 +127,24 @@ public final class PiAgentSession: ObservableObject {
         defer { connecting = false }
         if presence == .disconnected { presence = .connecting }
         do {
-            let client = PiClient(transport: try makeTransport())
+            let transport = try await makeTransport()
+            guard wantsConnection, !Task.isCancelled else { return }
+            let client = PiClient(transport: transport)
             try await client.start()
             self.client = client
             listen(to: client)
+            let activityAtRead = activityRevision
             let state = try await client.send(.getState)
             config = PiAgentConfig(state: state.data)
-            presence = state.data?["isStreaming"]?.boolValue == true ? .working : .idle
+            let initialPresence: Presence = state.data?["isStreaming"]?.boolValue == true ? .working : .idle
             attempts = 0
             lastConnectError = nil
             try await sync()
+            // Events received during sync are newer than get_state; never overwrite a live turn.
+            if activityRevision == activityAtRead { presence = initialPresence }
         } catch {
             await dropConnection()
+            guard wantsConnection else { presence = .disconnected; return }
             lastConnectError = String(describing: error)
             if autoReconnect && wantsConnection {
                 scheduleReconnect()
@@ -166,6 +173,7 @@ public final class PiAgentSession: ObservableObject {
     }
 
     private func dropConnection() async {
+        activityRevision += 1
         listener?.cancel()
         listener = nil
         await client?.close()
@@ -247,24 +255,57 @@ public final class PiAgentSession: ObservableObject {
     }
 
     /// Sends a prompt when idle. While working, use `steer` or `followUp` instead.
-    public func send(_ text: String, images: [PiImage] = []) async {
+    @discardableResult
+    public func send(_ text: String, images: [PiImage] = []) async -> Bool {
         let text = withReactionNotes(text)
-        await submit(text, .prompt(text, streamingBehavior: nil, images: images)) { response in
+        return await submit(text, .prompt(text, streamingBehavior: nil, images: images)) { response in
             if response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
         }
     }
 
-    public func steer(_ text: String, images: [PiImage] = []) async {
-        let text = withReactionNotes(text)
-        await submit(text, .steer(text, images: images))
+    public enum ProjectRequestOutcome: Equatable, Sendable {
+        case accepted
+        case rejected(String)
+        case uncertain
     }
-    public func followUp(_ text: String, images: [PiImage] = []) async {
+
+    /// A project request must stay byte-for-byte correlated and must not import 1:1 reactions.
+    public func sendProjectRequest(_ text: String) async -> Bool {
+        await sendProjectRequestOutcome(text) == .accepted
+    }
+
+    /// A negative server acknowledgement proves rejection. A lost acknowledgement does not.
+    public func sendProjectRequestOutcome(_ text: String) async -> ProjectRequestOutcome {
+        let result = await submitResult(text, .prompt(text, streamingBehavior: nil, images: [])) { response in
+            if response.data?["disposition"]?.stringValue == "started" { self.presence = .working }
+        }
+        switch result {
+        case .success: return .accepted
+        case .failure(PiClientError.rejected(_, let reason)):
+            return .rejected(reason ?? "The agent rejected the request before accepting it.")
+        case .failure: return .uncertain
+        }
+    }
+
+    @discardableResult
+    public func steer(_ text: String, images: [PiImage] = []) async -> Bool {
         let text = withReactionNotes(text)
-        await submit(text, .followUp(text, images: images))
+        return await submit(text, .steer(text, images: images))
+    }
+    @discardableResult
+    public func followUp(_ text: String, images: [PiImage] = []) async -> Bool {
+        let text = withReactionNotes(text)
+        return await submit(text, .followUp(text, images: images))
     }
 
     /// Shows `text` as pending until a sync stores it, and drops it again if the send fails.
-    private func submit(_ text: String, _ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async {
+    @discardableResult
+    private func submit(_ text: String, _ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async -> Bool {
+        if case .success = await submitResult(text, command, then: handle) { return true }
+        return false
+    }
+
+    private func submitResult(_ text: String, _ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async -> Result<PiResponse, Error> {
         var attached: [PiImage] = []
         switch command {
         case .prompt(_, _, let images), .steer(_, let images), .followUp(_, let images): attached = images
@@ -278,7 +319,9 @@ public final class PiAgentSession: ObservableObject {
         let item = TranscriptItem(id: "pending:\(UUID().uuidString)", role: .user, text: shown, date: Date())
         pendingMessages.append(item)
         pendingSince[item.id] = transcript.count
-        if !(await run(command, then: handle)) { dropPending(item.id) }
+        let result = await runResult(command, then: handle)
+        if case .failure = result { dropPending(item.id) }
+        return result
     }
 
     private func dropPending(_ id: String) {
@@ -321,11 +364,15 @@ public final class PiAgentSession: ObservableObject {
         await run(.event(source: source, text: text, key: key))
     }
 
-    public func answer(_ answer: PiDialogAnswer) async {
-        guard let client, let dialog else { return }
+    private var answeringDialogs: Set<String> = []
+    public func answer(_ answer: PiDialogAnswer, expectedDialogID: String? = nil) async {
+        guard let client, let dialog,
+              expectedDialogID == nil || expectedDialogID == dialog.id,
+              answeringDialogs.insert(dialog.id).inserted else { return }
+        defer { answeringDialogs.remove(dialog.id) }
         do {
             try await client.answer(dialog, with: answer)
-            self.dialog = nil
+            if self.dialog?.id == dialog.id { self.dialog = nil }
             _ = try? store.append([ApprovalLog.event(agentID: agentID, dialog: dialog, answer: answer)])
             approvalsVersion += 1
         } catch {
@@ -378,19 +425,24 @@ public final class PiAgentSession: ObservableObject {
 
     @discardableResult
     private func run(_ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async -> Bool {
+        if case .success = await runResult(command, then: handle) { return true }
+        return false
+    }
+
+    private func runResult(_ command: PiCommand, then handle: ((PiResponse) -> Void)? = nil) async -> Result<PiResponse, Error> {
         guard let client else {
             lastError = "Not connected"
-            return false
+            return .failure(PiClientError.disconnected)
         }
         do {
             let response = try await client.send(command)
             lastError = nil
             handle?(response)
             if command == .compact || command == .abort { try await sync() }
-            return true
+            return .success(response)
         } catch {
             lastError = String(describing: error)
-            return false
+            return .failure(error)
         }
     }
 
@@ -400,14 +452,25 @@ public final class PiAgentSession: ObservableObject {
         listener = Task { [weak self] in
             for await record in client.records {
                 guard let self, !Task.isCancelled else { return }
-                await self.handle(record)
+                if case .event(let type, _) = record, type == "agent_settled" {
+                    // Keep consuming live events while the settled transcript read is pending.
+                    // Stamp at receipt so a newer start wins even if this task begins later.
+                    self.activityRevision += 1
+                    let revision = self.activityRevision
+                    Task { [weak self] in
+                        guard let self, self.client === client else { return }
+                        await self.handle(record, activityAtReceipt: revision)
+                    }
+                } else {
+                    await self.handle(record)
+                }
             }
             guard let self, !Task.isCancelled else { return }
             self.streamEnded()
         }
     }
 
-    func handle(_ record: PiRecord) async {
+    func handle(_ record: PiRecord, activityAtReceipt: Int? = nil) async {
         switch record {
         case .dialog(let dialog):
             self.dialog = dialog
@@ -420,6 +483,7 @@ public final class PiAgentSession: ObservableObject {
         case .event(let type, let raw):
             switch type {
             case "agent_start":
+                activityRevision += 1
                 presence = .working
                 turnFailed = false
             case "agent_end", "message_end":
@@ -452,13 +516,26 @@ public final class PiAgentSession: ObservableObject {
                 }
             case "agent_settled":
                 // `agent_end` can be followed by retries or compaction; only settled means done.
-                presence = .idle
+                if activityAtReceipt == nil { activityRevision += 1 }
+                let settledRevision = activityAtReceipt ?? activityRevision
+                guard activityRevision == settledRevision else { return }
                 currentTool = nil
-                try? await sync()
+                do { try await sync() }
+                catch {
+                    guard activityRevision == settledRevision else { return }
+                    lastError = "Could not refresh the completed turn: \(error)"
+                    lastConnectError = lastError
+                    await dropConnection()
+                    if autoReconnect && wantsConnection { scheduleReconnect() }
+                    else { presence = .failed(lastError ?? "Transcript refresh failed") }
+                    return
+                }
+                guard activityRevision == settledRevision else { return }
+                presence = .idle
                 streamingText = ""
                 streamingThinking = ""
                 liveSteps = []
-                if !turnFailed, transcript.last?.role == .assistant, let model = config.model {
+                if !turnFailed, transcript.last?.role == .assistant, transcript.last?.failureReason == nil, let model = config.model {
                     modelLocks.setLastKnownGood(model, for: agentID)
                 }
                 if let model = pendingModel {

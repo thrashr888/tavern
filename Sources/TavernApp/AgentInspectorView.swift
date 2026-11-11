@@ -20,7 +20,7 @@ struct AgentInspectorView: View {
             // ScrollView, switching to a shorter tab left clicks landing ~40pt off the drawn controls.
             VStack(alignment: .leading, spacing: 14) {
                 VStack(spacing: 8) {
-                    AvatarView(member: agent, size: 140)
+                    AvatarView(member: agent, size: 48)
                     Text(agent.name).tavernFont(.title2, weight: .semibold)
                     let subtitle = [agent.partyClass, agent.host].compactMap { $0 }.joined(separator: " · ")
                     if !subtitle.isEmpty {
@@ -46,16 +46,21 @@ struct AgentInspectorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     switch tab {
                     case .activity:
-                        // What the agent did, then what it asked the user. Waiting dialogs also show in the thread.
-                        AgentTasksSection(agent: agent)
-                        AgentSpellCasts(member: agent, book: model.spellbook)
                         if let session = model.session(for: agent.id) {
+                            InspectorPendingApproval(session: session)
+                            PinnedCardsSection(session: session)
                             ActivitySection(session: session)
-                            if let store = model.store {
-                                ApprovalsSection(session: session, store: store)
+                        }
+                        DisclosureGroup("Tasks") {
+                            AgentTasksSection(agent: agent).padding(.top, 8)
+                        }
+                        DisclosureGroup("Spell history") {
+                            AgentSpellCasts(member: agent, book: model.spellbook).padding(.top, 8)
+                        }
+                        if let session = model.session(for: agent.id), let store = model.store {
+                            DisclosureGroup("Approval history") {
+                                ApprovalsSection(session: session, store: store).padding(.top, 8)
                             }
-                        } else {
-                            placeholder("No activity until \(agent.name) is connected.")
                         }
                     case .links:
                         if let session = model.session(for: agent.id) {
@@ -377,6 +382,17 @@ private struct MachineSection: View {
 }
 
 /// The latest turn's steps (live while working), like an Activity panel.
+struct InspectorPendingApproval: View {
+    @ObservedObject var session: PiAgentSession
+    var body: some View {
+        if let dialog = session.dialog {
+            DialogBanner(dialog: dialog) { answer in
+                Task { await session.answer(answer, expectedDialogID: dialog.id) }
+            }.id(dialog.id)
+        }
+    }
+}
+
 private struct ActivitySection: View {
     @ObservedObject var session: PiAgentSession
 
@@ -389,7 +405,15 @@ private struct ActivitySection: View {
                     Text(started.formatted(date: .abbreviated, time: .shortened))
                         .tavernFont(.caption).foregroundStyle(.secondary)
                 }
-                StepList(steps: work.steps)
+                if session.isWorking, session.liveWork != nil, let current = work.steps.last(where: { $0.isRunning }) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text(current.title).lineLimit(2)
+                    }.tavernFont(.callout)
+                }
+                DisclosureGroup("Steps (\(work.steps.count))") {
+                    StepList(steps: work.steps).padding(.top, 6)
+                }
             } else {
                 Text("No tool runs yet").foregroundStyle(.secondary)
             }

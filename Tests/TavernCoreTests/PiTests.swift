@@ -426,6 +426,23 @@ final class PiAgentSessionTests: XCTestCase {
         XCTAssertEqual(pi.sent.last, ["type": "extension_ui_response", "id": "d1", "confirmed": true])
     }
 
+    func testStaleDialogCardCannotAnswerNewDialog() async throws {
+        let store = try EventStore(path: ":memory:")
+        let pi = FakePi(sessionID: "s1", entryIDs: [])
+        let session = PiAgentSession(agentID: "flint", store: store) { pi }
+        await session.connect()
+        let dialog = PiDialog(id: "new", method: .confirm, title: "New request")
+        await session.handle(.dialog(dialog))
+        let before = pi.sent.count
+        await session.answer(.confirmed(true), expectedDialogID: "old")
+        XCTAssertEqual(pi.sent.count, before)
+        XCTAssertEqual(session.dialog, dialog)
+        await session.answer(.confirmed(false), expectedDialogID: "new")
+        await session.answer(.confirmed(false), expectedDialogID: "new")
+        XCTAssertEqual(pi.sent.count, before + 1)
+        XCTAssertNil(session.dialog)
+    }
+
     func testPromptWhileBusyIsNotSentWithoutBehavior() async throws {
         let store = try EventStore(path: ":memory:")
         let pi = FakePi(sessionID: "s1", entryIDs: [])

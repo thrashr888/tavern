@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
     @Published var dashboardStats: DashboardStats?
     /// Tavern's own MCP server, for the home agent (the Pi agent on this Mac).
     lazy var mcp = TavernMCP(model: self)
+    lazy var projectChats = ProjectChatsModel(store: store, model: self)
     /// The party's spells, from Tavern's read-only clone of the spellbook repo.
     let spellbook = SpellbookStore()
     /// Clef Flash (or Jev) suggestions: which spell, who a ticket is for, which project.

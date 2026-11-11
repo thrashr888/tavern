@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TavernCore
 
-/// Keyboard navigation. ⌘1 Dashboard, ⌘2 Goals, ⌘3… the Pi agents, then Services and Mail;
+/// Keyboard navigation. ⌘1 Home, ⌘2 Goals, ⌘3… the Pi agents, then Services and Mail;
 /// ⌥⌘1… the hosted party members. Holding ⌘ (or ⌥⌘) shows each shortcut in the sidebar.
 enum Shortcuts {
     struct Entry {
@@ -13,7 +13,7 @@ enum Shortcuts {
     }
 
     static func entries(for roster: Roster) -> [Entry] {
-        var fixed: [(Page, String)] = [(.dashboard, "Dashboard"), (.goals, "Goals")]
+        var fixed: [(Page, String)] = [(.projects, "Home"), (.goals, "Goals")]
         fixed += roster.piAgents.map { (Page.agent(id: $0.id), $0.name) }
         fixed += [(.services, "Services"), (.mail(project: nil), "Mail")]
         var entries = fixed.prefix(9).enumerated().map { index, item in
@@ -42,6 +42,8 @@ struct GoCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(entry.key), modifiers: entry.option ? [.command, .option] : .command)
             }
             Divider()
+            Button("Pinned widgets") { NotificationCenter.default.post(name: .tavernOpenPage, object: Page.pinnedWidgets.storageKey) }
+            Button("Info") { NotificationCenter.default.post(name: .tavernOpenPage, object: Page.dashboard.storageKey) }
             Button("Agent config") { NotificationCenter.default.post(name: .tavernOpenPage, object: Page.settings.storageKey) }
             // ⌘, stays with Tavern > Settings…, as on every Mac app.
             SettingsLink { Text("Settings…") }

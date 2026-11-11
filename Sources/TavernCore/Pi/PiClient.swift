@@ -3,6 +3,7 @@ import Foundation
 public enum PiClientError: Error, Equatable {
     case rejected(command: String, error: String?)
     case disconnected
+    case timedOut(command: String)
 }
 
 /// Request/response correlation over a `PiTransport`. Responses match by `id`, never by order.
@@ -10,14 +11,17 @@ public enum PiClientError: Error, Equatable {
 public actor PiClient {
     private let transport: PiTransport
     private var pending: [String: CheckedContinuation<PiResponse, Error>] = [:]
+    private var deadlines: [String: Task<Void, Never>] = [:]
+    private let requestTimeout: Duration
     private var nextID = 0
     private var closed = false
 
     public nonisolated let records: AsyncStream<PiRecord>
     private let recordSink: AsyncStream<PiRecord>.Continuation
 
-    public init(transport: PiTransport) {
+    public init(transport: PiTransport, requestTimeout: Duration = .seconds(60)) {
         self.transport = transport
+        self.requestTimeout = requestTimeout
         let made = AsyncStream.makeStream(of: PiRecord.self, bufferingPolicy: .unbounded)
         records = made.stream
         recordSink = made.continuation
@@ -56,15 +60,33 @@ public actor PiClient {
         nextID += 1
         let id = "tavern-\(nextID)"
         let line = try command.json(id: id, requestId: command.submitsMessage ? UUID().uuidString : nil).encoded()
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            do {
-                try transport.send(line)
-            } catch {
-                pending[id] = nil
-                continuation.resume(throwing: error)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                pending[id] = continuation
+                deadlines[id] = Task { [weak self, requestTimeout] in
+                    do { try await Task.sleep(for: requestTimeout) } catch { return }
+                    await self?.expire(id, command: command.type)
+                }
+                do {
+                    try transport.send(line)
+                } catch {
+                    finish(id, result: .failure(error))
+                }
             }
+        } onCancel: {
+            Task { await self.finish(id, result: .failure(CancellationError())) }
         }
+    }
+
+    private func finish(_ id: String, result: Result<PiResponse, Error>) {
+        deadlines.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(with: result)
+    }
+
+    private func expire(_ id: String, command: String) {
+        // A timeout is not evidence that a prompt was rejected. Callers must not resend it.
+        finish(id, result: .failure(PiClientError.timedOut(command: command)))
     }
 
     public func answer(_ dialog: PiDialog, with answer: PiDialogAnswer) throws {
@@ -73,13 +95,14 @@ public actor PiClient {
 
     public func close() {
         transport.close()
+        didClose()
     }
 
     func receive(_ line: Data) {
         guard let record = try? PiRecord.parse(line) else { return }
-        if case .response(let response) = record, let id = response.id,
-           let continuation = pending.removeValue(forKey: id) {
-            continuation.resume(returning: response)
+        if case .response(let response) = record, let id = response.id {
+            // Late replies after timeout/cancel are ignored, never matched to another request.
+            finish(id, result: .success(response))
         } else {
             recordSink.yield(record)
         }
@@ -89,6 +112,8 @@ public actor PiClient {
         closed = true
         let waiting = pending
         pending = [:]
+        deadlines.values.forEach { $0.cancel() }
+        deadlines = [:]
         waiting.values.forEach { $0.resume(throwing: PiClientError.disconnected) }
         recordSink.finish()
     }

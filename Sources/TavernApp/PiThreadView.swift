@@ -5,8 +5,14 @@ import TavernCore
 struct PiThreadView: View {
     @ObservedObject var session: PiAgentSession
     var agent: RosterMember?
-    @State private var draft = ""
+    @ObservedObject private var draftStore = MessageDraftStore.shared
+    private var draftKey: String { "agent:\(session.agentID):composer" }
+    private var draft: String {
+        get { draftStore.text(for: draftKey) }
+        nonmutating set { draftStore.set(newValue, for: draftKey) }
+    }
     @State private var images: [DraftImage] = []
+    @State private var submitting = false
     @State private var dropTargeted = false
     @FocusState private var composerFocused: Bool
     @State private var finding = false
@@ -133,7 +139,7 @@ struct PiThreadView: View {
                             }
                                 .findHighlight(matched: matches.contains(row.id), current: row.id == currentMatch)
                         case .work(let work): WorkRow(work: work)
-                        case .card(_, let card): ToolCardView(card: card, session: session)
+                        case .card(_, let card): PinnableCardView(card: card, rowID: row.id, session: session)
                         case .spell(_, let spell): SpellCastCard(spell: spell)
                         case .background(let run): HeartbeatRow(run: run, session: session)
                         }
@@ -190,7 +196,7 @@ struct PiThreadView: View {
             // What the agent is waiting on sits where you answer, just above the composer.
             if let dialog = session.dialog {
                 DialogBanner(dialog: dialog) { answer in
-                    Task { await session.answer(answer) }
+                    Task { await session.answer(answer, expectedDialogID: dialog.id) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -200,7 +206,7 @@ struct PiThreadView: View {
             }
             VStack(alignment: .leading, spacing: 10) {
                 AttachmentTray(images: $images)
-                TextField(placeholder, text: $draft, axis: .vertical)
+                TextField(placeholder, text: Binding(get: { draft }, set: { draft = $0 }), axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .focused($composerFocused)
@@ -208,7 +214,7 @@ struct PiThreadView: View {
                     .padding(.horizontal, 4)
                 HStack(spacing: 6) {
                     AddImageButton(images: $images)
-                    EmojiDraftButton(draft: $draft)
+                    EmojiDraftButton(draft: Binding(get: { draft }, set: { draft = $0 }))
                     if let model = session.config.model {
                         Chip(systemImage: "cpu", text: model.shortName).help(model.label)
                     }
@@ -277,13 +283,21 @@ struct PiThreadView: View {
         }
     }
 
-    private func submit(_ action: @escaping (String, [PiImage]) async -> Void) {
+    private func submit(_ action: @escaping (String, [PiImage]) async -> Bool) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !images.isEmpty else { return }
+        guard !submitting, !text.isEmpty || !images.isEmpty else { return }
+        let original = draft
+        let key = draftKey
+        let originalImages = images
         let attached = images.map(\.piImage)
-        draft = ""
-        images = []
-        Task { await action(text.isEmpty ? "Here's an image." : text, attached) }
+        submitting = true
+        Task {
+            defer { submitting = false }
+            if await action(text.isEmpty ? "Here's an image." : text, attached) {
+                draftStore.clear(key, ifMatching: original)
+                if images == originalImages { images = [] }
+            }
+        }
     }
 }
 

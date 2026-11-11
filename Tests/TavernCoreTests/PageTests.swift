@@ -3,15 +3,21 @@ import XCTest
 
 final class PageTests: XCTestCase {
     func testStorageKeysRoundTrip() {
-        let pages: [Page] = [.dashboard, .settings, .goals, .agent(id: "tally"), .mail(project: nil), .mail(project: "tavern"),
+        let pages: [Page] = [.dashboard, .projects, .pinnedWidgets, .project(id: "abc"), .settings, .goals, .agent(id: "tally"), .mail(project: nil), .mail(project: "tavern"),
                              .spellbook(spell: nil), .spellbook(spell: "SB-20")]
         for page in pages {
             XCTAssertEqual(Page(storageKey: page.storageKey), page)
         }
     }
 
-    func testFirstLaunchOpensDashboard() {
-        XCTAssertEqual(Page.restore(nil, roster: .fixture), .dashboard)
+    func testPinnedWidgetsRestoresWithoutAnAgent() {
+        XCTAssertEqual(Page.pinnedWidgets.storageKey, "pinned-widgets")
+        XCTAssertEqual(Page.restore("pinned-widgets", roster: .fallback), .pinnedWidgets)
+        XCTAssertNil(Page(storageKey: "pinned-widgets:unknown"))
+    }
+
+    func testFirstLaunchOpensHome() {
+        XCTAssertEqual(Page.restore(nil, roster: .fixture), .projects)
     }
 
     func testRestoresLastPage() {
@@ -20,12 +26,12 @@ final class PageTests: XCTestCase {
         XCTAssertEqual(Page.restore("mail:all", roster: .fixture), .mail(project: nil))
     }
 
-    func testUnknownOrStalePagesFallBackToDashboard() {
-        XCTAssertEqual(Page.restore("garbage", roster: .fixture), .dashboard)
-        XCTAssertEqual(Page.restore("agent:gone", roster: .fixture), .dashboard)
+    func testUnknownOrStalePagesFallBackToHome() {
+        XCTAssertEqual(Page.restore("garbage", roster: .fixture), .projects)
+        XCTAssertEqual(Page.restore("agent:gone", roster: .fixture), .projects)
         // Hosted agents have no thread page.
-        XCTAssertEqual(Page.restore("agent:rook", roster: .fixture), .dashboard)
-        XCTAssertEqual(Page.restore("mail:gone", roster: .fixture), .dashboard)
+        XCTAssertEqual(Page.restore("agent:rook", roster: .fixture), .projects)
+        XCTAssertEqual(Page.restore("mail:gone", roster: .fixture), .projects)
     }
 
     func testRosterIDsAreUnique() {
