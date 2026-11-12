@@ -105,6 +105,23 @@ final class PiReconnectTests: XCTestCase {
         guard case .failed = session.presence else { return XCTFail("expected failed, got \(session.presence)") }
     }
 
+    func testDisconnectDuringRouteEvaluationDoesNotOpenTransport() async throws {
+        let store = try EventStore(path: ":memory:")
+        let pi = FakePi(sessionID: "s1", entryIDs: ["e1"])
+        var resume: CheckedContinuation<Void, Never>?
+        let session = PiAgentSession(agentID: "tally", store: store) {
+            await withCheckedContinuation { resume = $0 }
+            return pi
+        }
+        let connection = Task { await session.connect() }
+        try await waitUntil { resume != nil }
+        await session.disconnect()
+        resume?.resume()
+        await connection.value
+        XCTAssertEqual(session.presence, .disconnected)
+        XCTAssertEqual(try store.eventCount(), 0)
+    }
+
     private func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + timeout
         while !condition() {

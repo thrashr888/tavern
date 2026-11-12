@@ -20,7 +20,11 @@ let package = Package(
             dependencies: ["TavernCore"],
             // AppIcon.png is rendered from art/AppIcon.svg; set as the Dock icon at launch.
             // Party art isn't bundled: portrait.* and avatars/<id>.* come from Application Support.
-            resources: [.copy("Resources/AppIcon.png")]
+            resources: [.copy("Resources/AppIcon.png"), .copy("Resources/CardScrollBridge.js")]
+        ),
+        .testTarget(
+            name: "TavernAppTests",
+            dependencies: ["TavernApp"]
         ),
         .testTarget(
             name: "TavernCoreTests",

@@ -54,6 +54,7 @@ public final class EventStore {
             );
             """)
         try exec("CREATE INDEX IF NOT EXISTS events_thread ON events (thread_key, source_ts, id);")
+        try exec("CREATE INDEX IF NOT EXISTS events_source_sequence ON events (source, id);")
         try exec("""
             CREATE TABLE IF NOT EXISTS cursors (
                 source TEXT PRIMARY KEY,
@@ -191,6 +192,31 @@ public final class EventStore {
     /// All events from one source (e.g. every stored Smithery mail), oldest first by source time.
     public func events(source: String) throws -> [TavernEvent] {
         try events(where: "source = ?", source)
+    }
+
+    /// Durable append order for local state reducers. Wall-clock source timestamps are display
+    /// metadata, not revision numbers: a clock correction must never revive an older state.
+    /// A caller may retain the last position to read only newly appended records. This also
+    /// observes records written by another EventStore connection to the same database.
+    public func eventRecords(source: String, after position: Int64 = 0) throws -> [(position: Int64, event: TavernEvent)] {
+        let stmt = try prepare("""
+            SELECT id, source, source_id, thread_key, author_agent, source_ts, received_ts, kind, payload
+            FROM events WHERE source = ? AND id > ? ORDER BY id;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bind(stmt, 1, source)
+        sqlite3_bind_int64(stmt, 2, position)
+        var result: [(position: Int64, event: TavernEvent)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            result.append((sqlite3_column_int64(stmt, 0), TavernEvent(
+                source: string(stmt, 1) ?? "", sourceID: string(stmt, 2) ?? "",
+                threadKey: string(stmt, 3) ?? "", authorAgent: string(stmt, 4),
+                sourceTS: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
+                receivedTS: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6)),
+                kind: string(stmt, 7) ?? "", payload: data(stmt, 8)
+            )))
+        }
+        return result
     }
 
     /// Events from one source since a time, oldest first, for the Dashboard's stats.

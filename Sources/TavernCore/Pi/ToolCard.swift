@@ -12,6 +12,53 @@ public struct ToolCard: Equatable, Sendable {
     /// The tool's structured result, sent to the card as `ui/notifications/tool-result`.
     public var structuredContent: JSONValue
 
+    /// Agent-authored widget headings occasionally contain a literal JSON Unicode escape.
+    /// Repair only their presentation, including old saved cards. The original tool input,
+    /// result, code, URLs and all other card fields must keep their exact contents.
+    public var displayStructuredContent: JSONValue {
+        guard server == "cards" else { return structuredContent }
+        let widget = String(resourceUri.dropFirst("ui://cards/".count))
+        guard resourceUri == "ui://cards/\(widget)",
+              ["chart", "checklist", "timeline", "calendar", "compose"].contains(widget),
+              case .object(var content) = structuredContent,
+              case .object(var body) = content[widget] else { return structuredContent }
+        Self.decodeTitle(in: &body)
+        if widget == "compose", case .array(let blocks) = body["blocks"] {
+            body["blocks"] = .array(blocks.map(Self.displayBlock))
+        }
+        content[widget] = .object(body)
+        return .object(content)
+    }
+
+    private static func displayBlock(_ value: JSONValue) -> JSONValue {
+        guard case .object(var block) = value, let type = block["type"]?.stringValue else { return value }
+        if ["chart", "checklist", "timeline", "calendar"].contains(type), case .object(var widget) = block[type] {
+            decodeTitle(in: &widget)
+            block[type] = .object(widget)
+        } else if type == "row", case .array(let blocks) = block["blocks"] {
+            block["blocks"] = .array(blocks.map(displayBlock))
+        } else if type == "table" {
+            decodeTitle(in: &block)
+        }
+        return .object(block)
+    }
+
+    private static func decodeTitle(in object: inout [String: JSONValue]) {
+        guard let title = object["title"]?.stringValue else { return }
+        // Parse only complete Unicode escape runs, once. JSONDecoder handles surrogate pairs;
+        // malformed sequences and explicitly doubled backslashes remain literal. This is not
+        // a second JSON decode of the payload, and the card still HTML-escapes the resulting text.
+        let pattern = #"(?<!\\)\\u[0-9a-fA-F]{4}(?:\\u[0-9a-fA-F]{4})*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let result = NSMutableString(string: title)
+        for match in regex.matches(in: title, range: NSRange(title.startIndex..., in: title)).reversed() {
+            let token = (title as NSString).substring(with: match.range)
+            guard let decoded = try? JSONDecoder().decode(String.self, from: Data("\"\(token)\"".utf8)) else { continue }
+            result.replaceCharacters(in: match.range, with: decoded)
+        }
+        object["title"] = .string(result as String)
+    }
+
     public init(server: String, resourceUri: String, toolName: String, arguments: JSONValue = .object([:]),
                 structuredContent: JSONValue = .null) {
         self.server = server
