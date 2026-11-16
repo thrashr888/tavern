@@ -73,6 +73,8 @@ public struct TranscriptItem: Equatable, Identifiable, Sendable {
     public var toolCallID: String?
     public var toolName: String?
     public var failed: Bool
+    /// Terminal model failure, even when the turn streamed partial text or thinking.
+    public var failureReason: String?
     /// For `.tool` items: an MCP Apps card to show with the result.
     public var card: ToolCard?
     /// For an edit's result: Pi's display diff (`details.diff`).
@@ -112,8 +114,12 @@ public struct TranscriptItem: Equatable, Identifiable, Sendable {
                 text = Self.text(of: message?["content"])
                 thinking = Self.thinking(of: message?["content"])
                 toolCalls = Self.toolCalls(of: message?["content"])
-                // A failed or aborted model call stores an empty reply; show why instead of nothing.
-                if text.isEmpty, thinking.isEmpty, let error = message?["errorMessage"]?.stringValue {
+                let stopReason = message?["stopReason"]?.stringValue
+                if stopReason == "error" || stopReason == "aborted" {
+                    failureReason = stopReason == "aborted" ? "Aborted" : (message?["errorMessage"]?.stringValue ?? "Agent turn failed")
+                }
+                // Preserve partial output for the individual transcript, but never mistake it for success.
+                if text.isEmpty, thinking.isEmpty, let error = failureReason ?? message?["errorMessage"]?.stringValue {
                     role = .system
                     if message?["stopReason"]?.stringValue == "aborted" {
                         text = "Aborted"

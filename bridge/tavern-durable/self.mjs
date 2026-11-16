@@ -40,7 +40,8 @@ export function selfExtension({ approvals, info, setMinutes, cwd, name = "this a
         name: "heartbeat_set",
         description:
           `How often your heartbeat runs, in minutes (0 pauses it; at most ${MAX_MINUTES}). Paul approves the change in Tavern. ` +
-          "What a beat does is HEARTBEAT.md in your folder (and heartbeat.json for checks); edit those to change it.",
+          "It only sets the timing: a beat runs HEARTBEAT.md in your folder (and heartbeat.json for checks), and does nothing " +
+          "until one exists. This tool doesn't create them; write HEARTBEAT.md yourself to say what a beat does.",
         parameters: {
           type: "object",
           properties: {
@@ -62,7 +63,11 @@ export function selfExtension({ approvals, info, setMinutes, cwd, name = "this a
           if (!answer?.allow) return text(answer?.note === "aborted" ? "The turn was aborted before Paul answered." : "Paul kept the current schedule.");
           fs.writeFileSync(path.join(cwd, SCHEDULE_FILE), JSON.stringify({ everyMinutes: minutes }, null, 2) + "\n");
           setMinutes(minutes);
-          return text(minutes === 0 ? "Heartbeat paused." : `Heartbeat now every ${minutes} min.`);
+          if (minutes === 0) return text("Heartbeat paused.");
+          const ready = ["HEARTBEAT.md", "heartbeat.json"].some((file) => fs.existsSync(path.join(cwd, file)));
+          return text(ready ? `Heartbeat now every ${minutes} min.`
+            : `Heartbeat now every ${minutes} min, but your folder has no HEARTBEAT.md or heartbeat.json yet, so beats do nothing ` +
+              `until you write ${path.join(cwd, "HEARTBEAT.md")} with what a beat should do.`);
         },
       },
     ],

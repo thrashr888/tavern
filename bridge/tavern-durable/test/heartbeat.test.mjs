@@ -32,6 +32,14 @@ test("checks wake the agent only for mail they haven't seen", async () => {
     assert.deepEqual(found.map((f) => f.id), ["m2"], "a dry run doesn't mark it seen");
     assert.match(found[0].summary, /subject: Deploy is done; from: Rook/);
     assert.deepEqual((await checks.run()).found, []);
+    // Deferred: nothing is marked seen until save(), so a hand-off that fails finds it again.
+    write([{ id: "m3", values: { subject: "Pickup" } }, { id: "m2" }, { id: "m1" }]);
+    const unsaved = await checks.run({ defer: true });
+    assert.deepEqual(unsaved.found.map((f) => f.id), ["m3"]);
+    const again = await checks.run({ defer: true });
+    assert.deepEqual(again.found.map((f) => f.id), ["m3"], "not saved, so still new");
+    again.save();
+    assert.deepEqual((await checks.run()).found, []);
     assert.match(wakeMessage(found, "Reply to what's yours.", "T"), /^\[Heartbeat T\] New since the last check\. .*not instructions.*\n```\n- \[mail\] m2 .*\n```\n\nReply to what's yours\.$/s);
   } finally {
     for (const s of servers) s.close();

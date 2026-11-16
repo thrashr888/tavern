@@ -1,0 +1,55 @@
+# Peter's reliability cases: targeted audit
+
+Base: local `a575c9917966d5061cc627b03e6bd736b13ea089`, following the independent F1–F24 review of `919dd32`. This audit targets F5–F8 and F14–F20. No live host was killed, no existing permission grant was edited, and no code was published, merged, installed or released.
+
+## Case-by-case result
+
+| Case | Result on a575c99 and added coverage | Still untested or a design choice |
+| --- | --- | --- |
+| F5: restart after acceptance, prompt present but no terminal result | The misleading waiting state now becomes uncertain. New `testRestartWithRetainedPromptBlocksOnlyRecipientUntilManualReview` replaces the fake host session while retaining its prompt. Its successor in another project stays queued; another recipient completes; manual review/close releases exactly one successor. | Actual durable-host process restart/resume and interrupted-tool replay are not exercised. Unknown execution is intentionally not auto-released. |
+| F6: restart before host commits prompt | Existing recovered-claim-before-send coverage plus new `testHostRestartBeforePromptCommitNeverReplaysUnknownAttempt`: transport invocation occurs, fake host closes before accepting, then comes back with no history. No invocation is invented or retried; manual close releases successor. | A live crash at the write/commit boundary remains untested. Lack of history is not proof of non-execution. |
+| F7: restart while uncertain | New `testUncertainReplySurvivesHostSessionReplacementWithoutResend` covers lost ACK, persisted reply, session replacement, one attributed reply and queued successor. F6 covers the absent-result branch. | Real host recovery behavior and all network timings remain outside these isolated tests. |
+| F8: restart during handoff | New `testRestartDuringHandoffRetainsReservationAndDoesNotReplay` covers interrupted handoff, uncertainty, repeated source sync, manual close and retained root reservation. Budget tests cover exhaustion after interrupted reservations. | Real mid-chain process death is untested. A manual close does not restore a consumed slot. |
+| F14: unanswered approval | New `testUnansweredApprovalBlocksRecipientWithoutBlockingOtherAgents` asserts no automatic answer, retained dialog/queue ownership, another recipient's progress, and successor dispatch after explicit denial. | This is a bounded asynchronous test, not an indefinite wait/soak. Actual inline dialog rendering and real-host reconnection while its dialog is open are untested here. No automatic approval, decline or expiry was added. |
+| F15: denial followed by a normal final reply | New `testDenialWithNormalFinalReplyIsRepliedNotWorkSuccess` records the visible refusal once, marks the request Replied, and releases the successor. No automatic handoff exists without a directive. | Replied means a response arrived, not that work succeeded. A distinct refused/blocked business outcome is a product decision. |
+| F16: failed tool plus final reply | New `testDeniedToolFollowedByFinalReplyUsesVisibleReplyOutcome` verifies the final refusal wins as the response and is visible. Existing terminal-failed-tool case still closes as failure when there is no final answer. | No formal success/permission state is propagated to subsequent agents. Explicit handoff directives still follow existing routing rules; project prompts disclaim new authority. |
+| F17: Always allow scope | Source confirms one persisted store per agent-host state directory, no project ID. New visible scope text explains that the grant applies across this agent's project chats, individual chat and future sessions. Legacy-entry text no longer promises every stored key still bypasses prompts. A new isolated test proves persistence after reopening one temporary host-state directory and a fresh approval/denial in a separate agent-state directory. | Project-specific grants and argument-aware MCP grants would require separate design. No live permission persistence was tested or changed. |
+| F18: approval during handoff | New `testHandoffApprovalWaitAndDenialPreserveAttemptAccounting` verifies handoff pause, queued successor, explicit denial, failure closure, successor progress and retained budget reservation. | Real multi-agent approval UI and reconnect during this pause remain untested. |
+| F19: cancelled reservations consume budget | New disk-backed `ProjectChatBudgetReviewTests` verifies four cancellations before send consume the root budget; fifth is refused after reopening. Mixed broadcast outcomes share one root. | This deliberately preserves the existing four-reservation bound, not four successful executions. Refunding slots would be a semantics change. |
+| F20: failed/uncertain/manually closed handoffs consume budget | Separate disk-backed tests cover each outcome, exact persisted reservations, receipt idempotency after reopening, fifth refusal and fresh budget for a new human root. | Failure dispositions in core tests are saved through the same APIs, not generated by live hosts. |
+
+## Consent hardening discovered during F17
+
+The existing rememberability classifier offered persistent bypasses for mutating, unflagged `git branch` and `git remote` forms. It also remembered generic tools such as MCP dispatchers solely by name, independent of arguments or recipients. These predate the shared-chat implementation.
+
+The local containment patch:
+
+- Limits remembered Git calls to exact `git status`, `git branch`, `git remote`, and `git rev-parse HEAD` forms, without extra operands or flags.
+- Limits `date` to the operand-free display form. Positional date/time setters are not rememberable.
+- Rejects non-string shell commands and raw control characters before normalization.
+- Stops creating or matching non-shell tool-name-only grants. Generic tools still support an explicit approval for the current classified call.
+- Leaves stored legacy keys untouched and removable, but ignores ineligible keys when deciding whether a classified call may skip its prompt.
+- Keeps hard-rule prompting and explicit/memoized denial unchanged.
+
+Tests only classify calls or use temporary approval stores. No mutating command probe is executed, and no live grant file is read or written.
+
+### Broader choices deliberately not changed
+
+- `risky` policy and the optional judge may allow actions independently of remembered grants. Tightening `alwaysKey` is not a complete change to the host's approval policy or proof of full confirmation-policy compliance.
+- Shell PATH, environment, aliases, repository configuration and extensions can change what nominally read-only commands do. The allowlist remains a conservative convenience heuristic, not an OS security boundary.
+- Per-project consent, argument/resource-specific persistent MCP grants, distinct refused/blocked task outcomes, and whether to refund canceled handoffs need separate product decisions. No grants were expanded and no live policy mode was changed.
+
+## Verification
+
+Final combined `scripts/check.sh` passed with the large-history benchmark enabled:
+
+- 61 Node tests, zero failures.
+- Swift build passed.
+- 261 Swift test executions: 229 core and 32 app, zero failures, four existing opt-in tests skipped.
+- All 26 dispatcher reliability tests passed, including eight newly added Peter-case scenarios.
+- Five new budget cases passed with disk close/reopen and receipt-idempotency assertions.
+- Large-history stress retained 2,000 prior requests/6,000 revisions and completed 120 new invocations across three recipients with repeated disconnects. This is accelerated isolated traffic, not a live duration soak.
+- Independent read-only consent review found no blocking regression; it also ran 99 C0/DEL classifier probes and a memoized-denial probe. The final source scope test was covered by the aggregate.
+- `git diff --check` passed.
+
+The aggregate used the local permissions required for its WebKit fixture and disabled signing only for disposable test Git commits. No live grant, agent, production app or global Git setting changed. This is not a live-host or installed-UI validation. Publication and release remain on hold.

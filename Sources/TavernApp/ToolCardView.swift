@@ -83,6 +83,7 @@ private struct CardWebView: NSViewRepresentable {
         }
         controller.add(context.coordinator, name: "mcp")
         let view = WKWebView(frame: .zero, configuration: configuration)
+        context.coordinator.scrollBridge.install(on: view)
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = view
@@ -104,6 +105,7 @@ private struct CardWebView: NSViewRepresentable {
 
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.setTheme(Self.theme(colorScheme, view, page: page))
+        context.coordinator.updateCard(card)
     }
 
     /// The appearance the card is drawn in; SwiftUI's color scheme can lag the window's. Cards
@@ -114,6 +116,7 @@ private struct CardWebView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: CardHost) {
+        CardScrollBridge.remove(from: view)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "mcp")
     }
 
@@ -148,10 +151,11 @@ private struct CardWebView: NSViewRepresentable {
 /// The host side of the MCP Apps protocol for one card: JSON-RPC over the page's messages.
 @MainActor
 final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    let card: ToolCard
+    private(set) var card: ToolCard
     let session: PiAgentSession
     var height: Binding<CGFloat>
     weak var webView: WKWebView?
+    let scrollBridge = CardScrollBridge()
     var theme = "light"
     private var initialized = false
     private var loaded = false
@@ -160,6 +164,17 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         self.card = card
         self.session = session
         self.height = height
+    }
+
+    // Refresh when the selected result changes, including a newer live-pin revision.
+    // No polling or automatic tool calls.
+    func updateCard(_ value: ToolCard) {
+        guard value != card else { return }
+        card = value
+        if initialized {
+            notify("ui/notifications/tool-input", ["arguments": card.arguments])
+            notify("ui/notifications/tool-result", ["content": .array([]), "structuredContent": card.displayStructuredContent])
+        }
     }
 
     func setTheme(_ value: String) {
@@ -204,7 +219,7 @@ final class CardHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case "ui/notifications/initialized":
             initialized = true
             notify("ui/notifications/tool-input", ["arguments": card.arguments])
-            notify("ui/notifications/tool-result", ["content": .array([]), "structuredContent": card.structuredContent])
+            notify("ui/notifications/tool-result", ["content": .array([]), "structuredContent": card.displayStructuredContent])
         case "ui/notifications/size-changed":
             if let h = params["height"]?.doubleValue {
                 let value = min(max(CGFloat(h), 40), 640)

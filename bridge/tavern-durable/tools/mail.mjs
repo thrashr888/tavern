@@ -6,6 +6,10 @@
 //   mail thread <threadId>                     every message of a thread, oldest first
 //   mail send --to <addr> --subject <s> [--cc <addr>] [--reply-to-message <messageId>] < body.txt
 //
+// Recipients: when the allow file exists (~/.config/tavern/mail-allow.json of the account,
+// `{ "allow": ["rook@example.com", ...] }`), send refuses any To or Cc address not in it; an empty
+// list stops all sends. The approvals treat that file as a secret, so the agent can't widen it unasked.
+//
 // Credentials are the gmail-mcp files: GMAIL_OAUTH_PATH (the OAuth client, `installed`) and
 // GMAIL_CREDENTIALS_PATH ({ tokens: { access_token, refresh_token, expiry_date } }), by default
 // in ~/.gmail-mcp. A refreshed access token is written back so the next call reuses it.
@@ -13,11 +17,42 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const DIR = path.join(os.homedir(), ".gmail-mcp");
 const OAUTH_PATH = process.env.GMAIL_OAUTH_PATH ?? path.join(DIR, "gcp-oauth.keys.json");
 const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH ?? path.join(DIR, "credentials.json");
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
+// From the account, not $HOME, so a command can't point it somewhere else.
+const ALLOW_PATH = path.join(os.userInfo().homedir, ".config", "tavern", "mail-allow.json");
+
+/** Addresses in a To/Cc value ("a@b, Name <c@d>"), lowercased; null when one can't be read. */
+export function recipients(value) {
+  if (!value) return [];
+  const out = String(value).split(",").map((part) => {
+    const match = part.match(/<([^<>\s]+)>\s*$/) ?? part.trim().match(/^([^\s<>]+)$/);
+    return match && /^[^@\s]+@[^@\s]+$/.test(match[1]) ? match[1].toLowerCase() : null;
+  });
+  return out.includes(null) ? null : out;
+}
+
+/** Why sending to these headers isn't allowed, or null. No allow file: no limit (as before). */
+export function blockedRecipients(to, cc, allowPath = ALLOW_PATH) {
+  let allow;
+  try {
+    allow = JSON.parse(fs.readFileSync(allowPath, "utf8")).allow;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    return `the allow file ${allowPath} can't be read, so sending is stopped`;
+  }
+  if (!Array.isArray(allow)) return `the allow file ${allowPath} has no "allow" list, so sending is stopped`;
+  const allowed = new Set(allow.map((a) => String(a).toLowerCase()));
+  const all = [recipients(to), recipients(cc)];
+  if (all.includes(null)) return "a recipient address couldn't be read";
+  const outside = all.flat().filter((a) => !allowed.has(a));
+  if (!allowed.size) return "sending is stopped (the allow list is empty)";
+  return outside.length ? `not on the allow list: ${outside.join(", ")}` : null;
+}
 
 async function accessToken() {
   const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf8"));
@@ -105,7 +140,8 @@ function fail(message) {
   process.exit(1);
 }
 
-const [command, ...rest] = process.argv.slice(2);
+const direct = process.argv[1] != null && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+const [command, ...rest] = direct ? process.argv.slice(2) : ["--imported"];
 const args = flags(rest);
 switch (command) {
   case "search": {
@@ -135,6 +171,8 @@ switch (command) {
   case "send": {
     if (!args.to || !args.subject) fail("usage: mail send --to <addr> --subject <s> [--cc <addr>] [--reply-to-message <id>] < body");
     if (/[\r\n]/.test(args.to + args.subject + (args.cc ?? ""))) fail("headers can't contain newlines");
+    const blocked = blockedRecipients(args.to, args.cc);
+    if (blocked) fail(`not sent: ${blocked}`);
     const text = fs.readFileSync(0, "utf8");
     if (!text.trim()) fail("the body (stdin) is empty");
     const headers = [`To: ${args.to}`, args.cc ? `Cc: ${args.cc}` : null, `Subject: ${encodeHeader(args.subject)}`];
@@ -151,6 +189,8 @@ switch (command) {
     console.log(`Sent ${sent.id} in thread ${sent.threadId}`);
     break;
   }
+  case "--imported":
+    break;
   default:
     fail("commands: search, read, thread, send (see the top of mail.mjs)");
 }

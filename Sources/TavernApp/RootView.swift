@@ -5,11 +5,14 @@ import TavernCore
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    /// Last open page, by stable Tavern id. Restored at launch (Dashboard on first launch).
+    /// Last open page, by stable Tavern id. Restored at launch (Home on first launch).
     @SceneStorage("tavern.page") private var pageKey: String = ""
+    @AppStorage("tavern.lastPage") private var lastPage = ""
+    @AppStorage("tavern.startPage") private var startPage = "last"
     @AppStorage(TextScale.storageKey) private var textScale = TextScale.standard
     @State private var selection: Page?
     @State private var searching = false
+    @State private var creatingProject = false
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -18,9 +21,17 @@ struct RootView: View {
                 .themedSidebar(Theme.current)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 232)
         } detail: {
-            switch selection ?? .dashboard {
+            switch selection ?? .projects {
             case .dashboard:
                 DashboardView(selection: $selection)
+            case .projects, .project:
+                ProjectChatsView(chats: model.projectChats, model: model,
+                    selected: Binding(get: { if case .project(let id) = selection { return id }; return nil },
+                                      set: { selection = $0.map { .project(id: $0) } ?? .projects }),
+                    creating: $creatingProject)
+
+            case .pinnedWidgets:
+                PinnedWidgetsView(selection: $selection)
             case .agent(let id):
                 AgentThreadView(agentID: id)
             case .member(let id):
@@ -56,12 +67,15 @@ struct RootView: View {
                 .transition(.opacity)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .tavernNewProject)) { _ in
+            selection = .projects; creatingProject = true
+        }
         .onReceive(NotificationCenter.default.publisher(for: .tavernOpenSearch)) { _ in searching = true }
         // ⌘K on top: close the sidebar's hover card and hold new ones until it's gone.
         .onChange(of: searching) { _, open in QuickCardController.shared.setSuspended(open) }
         // ⌘F finds in the open conversation; pages without one open Search instead.
         .onReceive(NotificationCenter.default.publisher(for: .tavernFind)) { _ in
-            switch selection ?? .dashboard {
+            switch selection ?? .projects {
             case .agent: break
             case .member(let id) where model.roster.member(id: id)?.imessage != nil: break
             default: searching = true
@@ -85,7 +99,11 @@ struct RootView: View {
         .onAppear {
             // TAVERN_PAGE (a page storage key, e.g. "agent:flint") opens a page at launch, for testing.
             let requested = ProcessInfo.processInfo.environment["TAVERN_PAGE"]
-            selection = Page.restore(requested ?? (pageKey.isEmpty ? nil : pageKey), roster: model.roster)
+            let saved = lastPage.isEmpty ? pageKey : lastPage
+            let launch = requested ?? (startPage == "last" ? saved : startPage)
+            selection = Page.restore(launch.isEmpty ? nil : launch, roster: model.roster)
+            if case .project(let id) = selection,
+               !model.projectChats.chats.contains(where: { $0.id == id && $0.archived != true }) { selection = .projects }
             // TAVERN_SETTINGS=1 opens Settings and TAVERN_SEARCH=1 opens ⌘K, for screenshots.
             if ProcessInfo.processInfo.environment["TAVERN_SETTINGS"] == "1" { openSettings() }
             if ProcessInfo.processInfo.environment["TAVERN_SEARCH"] == "1" {
@@ -98,7 +116,7 @@ struct RootView: View {
         .task { model.startNotifications() }
         .task(id: "\(model.roster.spellbookRepo ?? "")#\(model.roster.spellbookBranch ?? "")") { await model.spellbook.watch(roster: model.roster) }
         .onChange(of: selection) { _, newValue in
-            if let newValue { pageKey = newValue.storageKey }
+            if let newValue { pageKey = newValue.storageKey; lastPage = newValue.storageKey }
             searching = false // a click in the sidebar is a click outside ⌘K too
         }
     }
@@ -117,11 +135,17 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            SidebarLink(selection: selection, value: Page.dashboard) {
-                row { Label("Dashboard", systemImage: "square.grid.2x2") } hint: { ShortcutHint(page: .dashboard) }
+            SidebarLink(selection: selection, value: Page.projects) {
+                row { Label("Home", systemImage: "house") } hint: { ShortcutHint(page: .projects) }
             }
             SidebarLink(selection: selection, value: Page.goals) {
                 row { Label("Goals", systemImage: "checklist") } hint: { ShortcutHint(page: .goals) }
+            }
+            SidebarLink(selection: selection, value: Page.pinnedWidgets) {
+                Label("Pinned widgets", systemImage: "pin")
+            }
+            SidebarLink(selection: selection, value: Page.dashboard) {
+                row { Label("Info", systemImage: "info.circle") } hint: { ShortcutHint(page: .dashboard) }
             }
             if model.roster.spellbookRepo != nil {
                 SidebarLink(selection: selection, value: spellbookPage) {
@@ -141,6 +165,8 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            ProjectThreadSidebar(chats: model.projectChats, selection: $selection)
 
             // The whole party: Pi agents live, hosted members by their last mail.
             Section("Party") {
@@ -325,13 +351,14 @@ private struct OptionalHoverCard: ViewModifier {
 
 extension View {
     /// After a short hover, a card saying who this is: class, service and machine, model, presence.
-    func memberHoverCard(_ member: RosterMember) -> some View {
-        modifier(MemberHoverCardModifier(member: member))
+    func memberHoverCard(_ member: RosterMember, role: String? = nil) -> some View {
+        modifier(MemberHoverCardModifier(member: member, role: role))
     }
 }
 
 private struct MemberHoverCardModifier: ViewModifier {
     let member: RosterMember
+    let role: String?
     @State private var hovering = false
     @State private var showing = false
 
@@ -349,13 +376,14 @@ private struct MemberHoverCardModifier: ViewModifier {
                 }
             }
             .popover(isPresented: $showing, arrowEdge: .trailing) {
-                MemberHoverCard(member: member).themedSurface()
+                MemberHoverCard(member: member, role: role).themedSurface()
             }
     }
 }
 
 struct MemberHoverCard: View {
     let member: RosterMember
+    var role: String? = nil
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -377,6 +405,7 @@ struct MemberHoverCard: View {
                 }
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+                if let role { row("Role", role) }
                 if let where_ = whereItRuns { row("Runs", where_) }
                 if let model = model.session(for: member.id)?.config.model?.shortName { row("Model", model) }
                 if let usage = model.session(for: member.id)?.config.usage { row("Spent", usage.summary) }

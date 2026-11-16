@@ -22,13 +22,20 @@ final class PiCapabilitiesTests: XCTestCase {
 }
 
 final class AlwaysAllowTests: XCTestCase {
+    func testScopeDisclosureOnlyAppearsWithPersistentApprovalChoice() {
+        XCTAssertNil(PiDialog(id: "approval-once", method: .confirm, title: "Allow once?").alwaysScopeNotice)
+        XCTAssertNil(PiDialog(id: "ordinary-confirm", method: .confirm, title: "Question", alwaysLabel: "Untrusted label").alwaysScopeNotice)
+        XCTAssertNil(PiDialog(id: "approval-input", method: .input, title: "Question", alwaysLabel: "Untrusted label").alwaysScopeNotice)
+    }
+
     func testDialogOffersAlwaysAndTheAnswerSaysSo() throws {
-        let line = Data(#"{"type":"extension_ui_request","id":"approval-7","method":"confirm","title":"Allow bash?","always":"Always allow npm commands"}"#.utf8)
+        let line = Data(#"{"type":"extension_ui_request","id":"approval-7","method":"confirm","title":"Allow bash?","always":"Always allow `git status`"}"#.utf8)
         guard case .dialog(let dialog) = try PiRecord.parse(line) else { return XCTFail("not a dialog") }
-        XCTAssertEqual(dialog.alwaysLabel, "Always allow npm commands")
+        XCTAssertEqual(dialog.alwaysLabel, "Always allow `git status`")
+        XCTAssertEqual(dialog.alwaysScopeNotice, "Always allow applies to this agent across all projects and its individual chat, including future sessions. Remove it in the agent's About tab.")
         XCTAssertEqual(PiDialogAnswer.alwaysAllow.json(dialogID: "approval-7"),
                        ["type": "extension_ui_response", "id": "approval-7", "confirmed": true, "always": true])
-        let state = try JSONValue.decode(Data(#"{"alwaysAllow": ["bash:npm", "phone_location"]}"#.utf8))
-        XCTAssertEqual(PiAgentConfig(state: state).alwaysAllow, ["bash:npm", "phone_location"])
+        let state = try JSONValue.decode(Data(#"{"alwaysAllow": ["bash:git status", "phone_location"]}"#.utf8))
+        XCTAssertEqual(PiAgentConfig(state: state).alwaysAllow, ["bash:git status", "phone_location"])
     }
 }
