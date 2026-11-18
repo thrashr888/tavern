@@ -151,6 +151,22 @@ final class AuthorTests: XCTestCase {
 }
 
 final class IMessageTests: XCTestCase {
+    func testNationalUSHandleMatchesWholeConversation() {
+        let json = """
+        [{"conversation":"+16505550100","id":1,"is_from_me":false,"text":"unanswered","timestamp":"2026-10-18T22:30:52Z"},
+         {"conversation":"+446505550100","id":2,"is_from_me":false,"text":"international","timestamp":"2026-10-18T22:31:00Z"}]
+        """
+        for handle in ["650-555-0100", "(650) 555-0100", " 6505550100 ", "1-650-555-0100", "+1 (650) 555-0100"] {
+            let messages = CiderMessages.parse(Data(json.utf8), handle: handle)
+            XCTAssertEqual(messages.map(\.text), ["unanswered"], handle)
+            XCTAssertEqual(messages.last?.fromMe, false)
+        }
+        XCTAssertEqual(CiderMessages.parse(Data(json.utf8), handle: "+44 6505550100").map(\.text), ["international"])
+        XCTAssertTrue(CiderMessages.parse(Data(json.utf8), handle: "+6505550100").isEmpty,
+                      "an explicit international prefix must not be reinterpreted as a US number")
+        XCTAssertEqual(CiderMessages.normalized(" User@Example.com "), "user@example.com")
+    }
+
     func testKeepsOneConversationOldestFirst() {
         let json = """
         [{"conversation":"+16505550100","id":2,"is_from_me":false,"sender":"+16505550100","service":"iMessage","text":"Doc pass done","timestamp":"2026-10-18T22:30:52Z"},
