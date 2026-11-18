@@ -77,11 +77,14 @@ public struct CiderMessages: Sendable {
         .sorted { $0.date < $1.date }
     }
 
-    /// An email lowercased, or a phone number as "+" and all its digits.
+    /// An email lowercased, or a whole phone number. Unprefixed ten-digit numbers
+    /// use the North American country code; explicit international prefixes stay intact.
     static func normalized(_ handle: String) -> String {
         let trimmed = handle.trimmingCharacters(in: .whitespaces)
         if trimmed.contains("@") { return trimmed.lowercased() }
-        return "+" + trimmed.filter(\.isNumber)
+        let digits = trimmed.filter(\.isNumber)
+        if !trimmed.hasPrefix("+"), digits.count == 10 { return "+1" + digits }
+        return "+" + digits
     }
 
     private func run(_ arguments: [String]) async throws -> Data {
