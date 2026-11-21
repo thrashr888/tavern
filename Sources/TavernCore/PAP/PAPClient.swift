@@ -103,6 +103,21 @@ public actor PAPClient {
         try await call("run", ["connection": .string(connection), "tool": .string(tool), "params": .object(params)])
     }
 
+    /// Files the calls `body` makes under one PAP task, so the proxy's log shows them as one job
+    /// with its goal. The task is finished even when `body` throws.
+    public func task<T: Sendable>(_ title: String, goal: String, _ body: @Sendable () async throws -> T) async throws -> T {
+        let started = try await call("start_task", ["title": .string(title), "goal": .string(goal)])
+        let id = started["task"]?.stringValue ?? started["id"]?.stringValue
+        do {
+            let result = try await body()
+            if let id { _ = try? await call("finish_task", ["task": .string(id)]) }
+            return result
+        } catch {
+            if let id { _ = try? await call("finish_task", ["task": .string(id)]) }
+            throw error
+        }
+    }
+
     /// Calls one of PAP's MCP tools and returns its structured result.
     func call(_ name: String, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         if !initialized {

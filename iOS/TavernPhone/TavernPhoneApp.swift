@@ -1,3 +1,4 @@
+import BackgroundTasks
 import Combine
 import SwiftUI
 import TavernCore
@@ -6,15 +7,30 @@ import UserNotifications
 @main
 struct TavernPhoneApp: App {
     @StateObject private var model = PhoneModel()
+    @StateObject private var pap = PAPPhone()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(model)
-                .onAppear { model.requestNotifications() }
+                .environmentObject(pap)
+                .onAppear {
+                    model.pap = pap
+                    model.requestNotifications()
+                }
+                .onOpenURL { pap.handle($0) }
         }
-        .onChange(of: scenePhase) { _, phase in model.inBackground = phase != .active }
+        .onChange(of: scenePhase) { _, phase in
+            model.inBackground = phase != .active
+            if phase == .background { PhoneModel.scheduleHeartbeat() }
+        }
+        // The phone agents' heartbeat while the app is closed. iOS picks when this runs (often
+        // much later than asked, and less on low battery), so beats also run while it's open.
+        .backgroundTask(.appRefresh(PhoneModel.heartbeatTask)) {
+            await model.beat()
+            PhoneModel.scheduleHeartbeat()
+        }
     }
 }
 
@@ -38,10 +54,22 @@ struct RootView: View {
                 AgentListView()
                     .navigationDestination(for: String.self) { id in destination(id) }
             }
-            .tabItem { Label("Agents", systemImage: "person.3") }
+            .tabItem { Label("Party", systemImage: "person.3") }
             .tag("agents")
+
+            NavigationStack { SpellsView() }
+                .tabItem { Label("Spells", systemImage: "sparkles") }
+                .tag("spells")
+
+            NavigationStack { MailView() }
+                .tabItem { Label("Mail", systemImage: "envelope") }
+                .tag("mail")
+
+            NavigationStack { GoalsView() }
+                .tabItem { Label("Goals", systemImage: "list.bullet.rectangle") }
+                .tag("linear")
         }
-        .tint(.orange)
+        .tint(Color.tavernAccent)
     }
 
     @ViewBuilder private func destination(_ id: String) -> some View {
@@ -51,14 +79,27 @@ struct RootView: View {
     }
 }
 
-/// One Pi agent the phone talks to: a durable host's TCP address.
+/// One agent the phone talks to: a durable host's TCP address, or one that lives on the phone
+/// (LocalAgent.swift).
 struct PhoneAgent: Codable, Equatable, Identifiable {
     var id: String
     var name: String
     var host: String
     var port: UInt16
+    /// True for an agent on the iPhone itself; host and port are unused.
+    var local: Bool?
+    /// What a phone agent is for, in Paul's words, from Add to the party.
+    var role: String?
+    /// A phone agent's D&D class, which it picks itself.
+    var partyClass: String?
 
-    var endpoint: String { "\(host):\(port)" }
+    var isLocal: Bool { local == true }
+    var endpoint: String { isLocal ? "This iPhone" : "\(host):\(port)" }
+
+    /// A new phone agent. Until its first start picks a name, it's "New agent"; its id is fixed.
+    static func onPhone(role: String? = nil) -> PhoneAgent {
+        PhoneAgent(id: "phone-" + UUID().uuidString.prefix(8).lowercased(), name: "New agent", host: "", port: 0, local: true, role: role)
+    }
 }
 
 /// The agents (kept on the phone) and a live session for each, plus local notifications when
@@ -73,7 +114,18 @@ final class PhoneModel: ObservableObject {
     private var lastDialog: [String: String] = [:]
     var inBackground = false
     private let store: EventStore?
+    /// Location and battery, lent to every agent while the app is connected.
+    private let sensors = PhoneSensors()
+    private let calendar = PhoneCalendar()
+    /// Mail and Linear for the phone's own agents, through the app's PAP login.
+    weak var pap: PAPPhone?
     private static let key = "tavern.phone.agents"
+    /// Set once the phone has made its first agent of its own, so removing it sticks.
+    private static let setUpKey = "tavern.phone.localAgentSetUp"
+    /// Party hosts Paul removed, so the next launch doesn't add them back.
+    private static let removedKey = "tavern.phone.removedHosts"
+    nonisolated static let heartbeatTask = "dev.thrashr888.tavern.phone.heartbeat"
+    private var heartbeatTimer: AnyCancellable?
 
     init() {
         store = try? EventStore(path: EventStore.defaultURL().path)
@@ -84,8 +136,58 @@ final class PhoneModel: ObservableObject {
         if let seed = ProcessInfo.processInfo.environment["TAVERN_AGENTS"], !seed.isEmpty {
             agents = Self.parse(seed)
             save()
+        } else {
+            addPartyHosts()
+        }
+        #if !targetEnvironment(simulator)
+        // On a real iPhone, loopback is the phone itself: those entries (the Simulator's demo
+        // agent and its SSH forwards) can never connect.
+        agents.removeAll { !$0.isLocal && ["127.0.0.1", "localhost", "::1"].contains($0.host) }
+        #endif
+        // The party's first member that lives on the phone sets itself up on first launch.
+        if !UserDefaults.standard.bool(forKey: Self.setUpKey) {
+            UserDefaults.standard.set(true, forKey: Self.setUpKey)
+            if !agents.contains(where: \.isLocal) {
+                agents.insert(.onPhone(role: "Paul's pocket helper: where he is, his calendar and reminders, his mail and Linear goals, and remembering things for him."), at: 0)
+            }
+            save()
         }
         agents.forEach(start)
+        // While the app is open, a due beat runs within a minute.
+        heartbeatTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in Task { await self?.beat() } }
+    }
+
+    /// The party's hosts from the build (their tailnet names), added or brought up to date, except
+    /// ones Paul removed.
+    private func addPartyHosts() {
+        let removed = Set(UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? [])
+        for host in Party.info.hosts ?? [] where !removed.contains(host.id) {
+            let agent = PhoneAgent(id: host.id, name: host.name, host: host.host, port: host.port)
+            if let index = agents.firstIndex(where: { $0.id == host.id }) {
+                if !agents[index].isLocal { agents[index] = agent }
+            } else {
+                agents.append(agent)
+            }
+        }
+        save()
+    }
+
+    /// Party hosts not on the phone (removed, or new since), for Add to the party.
+    var missingPartyHosts: [Party.Host] {
+        (Party.info.hosts ?? []).filter { host in !agents.contains { $0.id == host.id } }
+    }
+
+    /// Runs the phone agents' due heartbeats and waits for any turn they start.
+    func beat() async {
+        await LocalAgentRuntime.beatDue()
+    }
+
+    /// Asks iOS for a background refresh in 15 minutes at the soonest; only due agents beat.
+    nonisolated static func scheduleHeartbeat() {
+        let request = BGAppRefreshTaskRequest(identifier: heartbeatTask)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
     }
 
     static func parse(_ text: String) -> [PhoneAgent] {
@@ -102,7 +204,18 @@ final class PhoneModel: ObservableObject {
     /// Connects (and keeps reconnecting) so Home and the list can show who needs you.
     private func start(_ agent: PhoneAgent) {
         guard let store, sessions[agent.id] == nil else { return }
-        let session = PiAgentSession(agentID: agent.id, store: store) { PiTCPTransport(host: agent.host, port: agent.port) }
+        let session: PiAgentSession
+        if agent.isLocal {
+            let runtime = LocalAgentRuntime.runtime(for: agent, reach: reach) { [weak self] persona in self?.chose(persona, id: agent.id) }
+            if agents.first(where: { $0.id == agent.id })?.name != runtime.agent.name, let persona = runtime.persona {
+                chose(persona, id: agent.id)
+            }
+            session = PiAgentSession(agentID: agent.id, store: store) { LocalAgentTransport(runtime: runtime) }
+        } else {
+            session = PiAgentSession(agentID: agent.id, store: store) { PiTCPTransport(host: agent.host, port: agent.port) }
+            session.lentTools = PhoneSensors.tools
+            session.lentToolHandler = { [sensors] tool, arguments in try await sensors.answer(tool, arguments) }
+        }
         sessions[agent.id] = session
         watchers[agent.id] = session.$dialog.combineLatest(session.$presence)
             .sink { [weak self] dialog, presence in
@@ -111,7 +224,36 @@ final class PhoneModel: ObservableObject {
         Task { await session.connect() }
     }
 
+    /// What a phone agent's tools reach.
+    private var reach: LocalAgentRuntime.Reach {
+        LocalAgentRuntime.Reach(
+            sensor: { [sensors] tool in try await sensors.answer(tool, .object([:])) },
+            inbox: { [weak self] in
+                guard let pap = self?.pap, pap.signedIn else { throw PhoneSensors.Failure(errorDescription: "Sign in to Personal Agent Proxy on the Mail tab first.") }
+                return try await pap.inbox()
+            },
+            goals: { [weak self] in
+                guard let pap = self?.pap, pap.signedIn else { throw PhoneSensors.Failure(errorDescription: "Sign in to Personal Agent Proxy on the Goals tab first.") }
+                return try await pap.goals()
+            },
+            icloud: { try await ICloudMail.inbox() },
+            calendar: { [calendar] days in try await calendar.events(days: days) },
+            reminders: { [calendar] in try await calendar.reminders() },
+            addReminder: { [calendar] title, due in try await calendar.addReminder(title: title, due: due) })
+    }
+
+    /// A phone agent picked its name: the list and threads show it (the id stays).
+    private func chose(_ persona: LocalAgentRuntime.Persona, id: String) {
+        guard let index = agents.firstIndex(where: { $0.id == id }) else { return }
+        agents[index].name = persona.name
+        agents[index].partyClass = persona.partyClass
+        save()
+    }
+
     func add(_ agent: PhoneAgent) {
+        var removed = UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? []
+        removed.removeAll { $0 == agent.id }
+        UserDefaults.standard.set(removed, forKey: Self.removedKey)
         if let old = sessions.removeValue(forKey: agent.id) { Task { await old.disconnect() } }
         agents.removeAll { $0.id == agent.id }
         agents.append(agent)
@@ -119,11 +261,18 @@ final class PhoneModel: ObservableObject {
         start(agent)
     }
 
+    /// Takes an agent out of the party whatever state it's in (connected, reconnecting or failed).
+    func remove(_ agent: PhoneAgent) {
+        if let index = agents.firstIndex(where: { $0.id == agent.id }) { remove(at: IndexSet(integer: index)) }
+    }
+
     func remove(at offsets: IndexSet) {
         for index in offsets {
             let agent = agents[index]
+            UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: Self.removedKey) ?? []) + [agent.id], forKey: Self.removedKey)
             watchers.removeValue(forKey: agent.id)
             if let session = sessions.removeValue(forKey: agent.id) { Task { await session.disconnect() } }
+            if agent.isLocal { LocalAgentRuntime.forget(agent) }
         }
         agents.remove(atOffsets: offsets)
         save()

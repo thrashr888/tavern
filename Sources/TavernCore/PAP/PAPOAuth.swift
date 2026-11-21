@@ -76,12 +76,22 @@ public actor PAPOAuth {
     /// Opens PAP's sign-in and consent page via `open`, waits for the loopback redirect, and
     /// stores the grant.
     public func signIn(open: @escaping @Sendable (URL) -> Void) async throws {
-        let verifier = OAuthPKCE.randomURLSafe(bytes: 32)
-        let state = OAuthPKCE.randomURLSafe(bytes: 16)
         let receiver = try await LoopbackReceiver.start()
         defer { receiver.stop() }
-        let redirect = "http://127.0.0.1:\(receiver.port)"
-        let clientID = try await register(redirect: redirect)
+        try await signIn(redirect: "http://127.0.0.1:\(receiver.port)", clientName: "Tavern") { url in
+            open(url)
+            return try await receiver.waitForRedirect()
+        }
+    }
+
+    /// The same sign-in for any redirect: `authorize` shows PAP's page at the URL it's given and
+    /// returns the redirect's query once PAP sends the user back (the iPhone app uses
+    /// ASWebAuthenticationSession and its own URL scheme).
+    public func signIn(redirect: String, clientName: String,
+                       authorize: @Sendable (URL) async throws -> [String: String]) async throws {
+        let verifier = OAuthPKCE.randomURLSafe(bytes: 32)
+        let state = OAuthPKCE.randomURLSafe(bytes: 16)
+        let clientID = try await register(redirect: redirect, clientName: clientName)
 
         var components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -94,9 +104,7 @@ public actor PAPOAuth {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
         ]
-        open(components.url!)
-
-        let query = try await receiver.waitForRedirect()
+        let query = try await authorize(components.url!)
         guard query["state"] == state else { throw OAuthError.stateMismatch }
         if let error = query["error"] { throw OAuthError.denied(error) }
         guard let code = query["code"] else { throw OAuthError.noCode }
@@ -129,12 +137,12 @@ public actor PAPOAuth {
     }
 
     /// RFC 7591 registration of a public client for this one redirect.
-    private func register(redirect: String) async throws -> String {
+    private func register(redirect: String, clientName: String) async throws -> String {
         var request = URLRequest(url: registerURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONValue.object([
-            "client_name": "Tavern",
+            "client_name": .string(clientName),
             "redirect_uris": .array([.string(redirect)]),
             "token_endpoint_auth_method": "none",
             "grant_types": .array(["authorization_code", "refresh_token"]),
